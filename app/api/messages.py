@@ -23,7 +23,7 @@ from app.repositories.message_repository import get_message_detail, list_message
 
 
 router = APIRouter(prefix="/api/messages", tags=["消息查询"])
-ProcessStatus = Literal["received", "ignored", "failed"]
+ProcessStatus = Literal["received", "ignored", "failed", "unsupported"]
 
 
 @router.get("", response_model=MessageListResponse)

@@ -234,6 +234,60 @@ def test_post_missing_encrypt_returns_422(client_and_dir) -> None:
     assert response.status_code == 422
 
 
+def test_post_json_envelope_requires_lowercase_encrypt(client_and_dir) -> None:
+    client, _ = client_and_dir
+    encrypted = encrypt_for_test(json.dumps(sample_message()).encode("utf-8"))
+    response = client.post(
+        "/api/jjt/callback",
+        params=signed_params(encrypted),
+        json={"Encrypt": encrypted},
+    )
+    assert response.status_code == 422
+
+
+def test_post_json_does_not_call_xml_envelope_parser(
+    client_and_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = client_and_dir
+
+    def fail_if_called(*_args, **_kwargs):
+        pytest.fail("JSON 回调不应调用 XML 外壳解析器")
+
+    monkeypatch.setattr("app.api.callback.parse_encrypted_envelope", fail_if_called)
+    message = sample_message("json-parser-isolation")
+    encrypted = encrypt_for_test(json.dumps(message).encode("utf-8"))
+    response = client.post(
+        "/api/jjt/callback",
+        params=signed_params(encrypted),
+        json={"encrypt": encrypted},
+    )
+    assert response.status_code == 200
+
+
+def test_post_json_voice_is_saved_as_unsupported(client_and_dir) -> None:
+    client, _ = client_and_dir
+    message = {
+        "msgid": "callback-voice-001",
+        "aibotid": "bot-001",
+        "chatid": "voice-group",
+        "chattype": "group",
+        "from": {"userid": "voice-user"},
+        "msgtype": "voice",
+        "voice": {"url": "mock://voice-not-downloaded"},
+    }
+    encrypted = encrypt_for_test(json.dumps(message).encode("utf-8"))
+    response = client.post(
+        "/api/jjt/callback",
+        params=signed_params(encrypted),
+        json={"encrypt": encrypted},
+    )
+    detail = client.get("/api/messages/callback-voice-001")
+    assert response.status_code == 200
+    assert detail.status_code == 200
+    assert detail.json()["process_status"] == "unsupported"
+    assert detail.json()["attachments"] == []
+
+
 def test_post_non_json_plaintext_returns_400(client_and_dir) -> None:
     client, _ = client_and_dir
     encrypted = encrypt_for_test(b"not-json")

@@ -6,7 +6,7 @@
 
 - 回调 URL 验证；
 - POST 消息签名校验和 AES-256-CBC 解密；
-- 同一 POST 地址自动识别交建通 JSON 与企业微信 `text/xml`/`application/xml`；
+- 同一 POST 地址按 `Content-Type` 分流交建通 JSON 与企业微信 `text/xml`/`application/xml`；
 - 企业微信 XML 安全解析、通用字段标准化和 `success` 应答；
 - 解密业务 JSON 的安全日志（`response_url`、token 类字段会脱敏）；
 - 按上海时区写入每日 JSONL 文件；
@@ -119,6 +119,23 @@ https://你的公网HTTPS域名/api/jjt/callback
 ```
 
 同一个地址同时处理 GET URL 验证和 POST 消息回调。GET 验证会在完成签名校验和解密后直接返回原始明文，不带 JSON 引号、BOM、额外换行或 HTML。部署时应保证此请求在 1 秒内返回。
+
+## 消息入口与格式兼容
+
+项目明确区分三种消息入口，信封解析逻辑互不混用：
+
+1. **交建通机器人真实回调**：请求使用 JSON 信封，格式为 `{"encrypt":"密文"}`。接口只从小写 `encrypt` 字段读取密文，完成验签和 AES 解密后，将解密得到的业务 JSON 交给 `MessageService`。该入口不会调用 XML 解析器。
+2. **企业微信传统回调**：请求的 `Content-Type` 为 `text/xml` 或 `application/xml`，信封中使用 `<Encrypt>`。该入口先解析 XML 信封，解密后的正文仍按企业微信传统 XML 处理。
+3. **本地模拟接口**：`POST /api/dev/mock-message` 直接接收已经解密的业务 JSON，不验签、不解密，也不访问外部网络。
+
+交建通 JSON 与企业微信 XML 入口只共用底层的 SHA1 验签和 AES-256-CBC 解密能力；两者的信封和明文解析完全分开。用户提供的 `python.zip` 是旧版 Python 2 XML 加解密参考，仅用于核对 SHA1、AES-256-CBC、PKCS#7 和消息长度规则；项目不会复制其中代码或安装 `pycrypto`，仍使用 Python 3 与 `pycryptodome`。
+
+解密后的业务消息兼容规则：
+
+- `text`、`image`、`mixed`、`file` 按现有逻辑标准化并保存；附件只保存元数据，不下载文件。
+- 单聊（`chattype=single`）缺少 `chatid` 时，内部生成 `single:{userid}`；群聊缺少 `chatid` 时返回参数错误。
+- `quote` 完整保留在 `raw_payload`/`raw_json`，但暂不拼入 `text_content`；引用内容中的图片也不会重复保存为当前消息附件。
+- `voice` 和未知 `msgtype` 不触发下载、识别或 URL 执行；原始 JSON 会保存，`process_status` 记为 `unsupported`，接口不会因此返回 HTTP 500。
 
 ## 企业微信自建应用验证
 

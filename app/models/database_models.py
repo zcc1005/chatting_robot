@@ -54,7 +54,7 @@ class Message(Base):
     __table_args__ = (
         UniqueConstraint("msgid", name="uq_messages_msgid"),
         CheckConstraint(
-            "process_status IN ('received', 'ignored', 'failed')",
+            "process_status IN ('received', 'ignored', 'failed', 'unsupported')",
             name="ck_messages_process_status",
         ),
         Index("ix_messages_msgid", "msgid"),
@@ -117,4 +117,3 @@ class MessageAttachment(Base):
     )
 
     message: Mapped[Message] = relationship(back_populates="attachments")
-

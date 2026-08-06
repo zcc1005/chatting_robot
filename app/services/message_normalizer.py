@@ -24,7 +24,6 @@ def normalize_jjt_message(
         raise MessageNormalizationError("消息必须是 JSON 对象")
 
     msgid = _required_string(payload, "msgid")
-    chatid = _required_string(payload, "chatid")
     chattype = _required_string(payload, "chattype")
     if chattype not in {"group", "single"}:
         raise MessageNormalizationError("chattype 必须是 group 或 single")
@@ -34,6 +33,7 @@ def normalize_jjt_message(
     if not isinstance(sender, dict):
         raise MessageNormalizationError("缺少必填字段 from.userid")
     sender_userid = _required_string(sender, "userid", path="from.userid")
+    chatid = _resolve_chatid(payload, chattype, sender_userid)
 
     text_content = ""
     attachments: list[NormalizedAttachment] = []
@@ -45,6 +45,9 @@ def normalize_jjt_message(
         attachments.append(_attachment_from_container(payload.get("file"), "file"))
     elif msgtype == "mixed":
         text_content, attachments = _normalize_mixed(payload.get("mixed"))
+    process_status = (
+        "received" if msgtype in {"text", "image", "mixed", "file"} else "unsupported"
+    )
 
     response_url = payload.get("response_url")
     if response_url is not None and not isinstance(response_url, str):
@@ -66,6 +69,7 @@ def normalize_jjt_message(
         attachments=attachments,
         response_url=response_url,
         received_at=_extract_received_at(payload),
+        process_status=process_status,
         raw_payload=copy.deepcopy(payload),
     )
 
@@ -78,6 +82,17 @@ def _required_string(
     if not isinstance(value, str) or not value.strip():
         raise MessageNormalizationError(f"缺少必填字段 {field_name}")
     return value
+
+
+def _resolve_chatid(
+    payload: dict[str, Any], chattype: str, sender_userid: str
+) -> str:
+    value = payload.get("chatid")
+    if isinstance(value, str) and value.strip():
+        return value
+    if chattype == "single":
+        return f"single:{sender_userid}"
+    raise MessageNormalizationError("群聊消息缺少必填字段 chatid")
 
 
 def _nested_text(container: Any, key: str) -> str:
@@ -171,4 +186,3 @@ def _parse_datetime(value: Any, field_name: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         parsed = parsed.replace(tzinfo=SHANGHAI_TIMEZONE)
     return parsed
-

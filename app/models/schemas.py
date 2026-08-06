@@ -28,6 +28,7 @@ class NormalizedMessage(BaseModel):
     attachments: list[NormalizedAttachment] = Field(default_factory=list)
     response_url: str | None = None
     received_at: datetime
+    process_status: Literal["received", "unsupported"] = "received"
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("received_at")
@@ -94,4 +95,3 @@ class MessageDetailResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     attachments: list[AttachmentDetail]
-

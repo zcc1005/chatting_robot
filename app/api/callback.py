@@ -180,35 +180,48 @@ async def _extract_encrypted_body(request: Request) -> tuple[str, CallbackFormat
     if len(body) > MAX_CALLBACK_BODY_BYTES:
         raise HTTPException(status_code=413, detail="回调请求体过大")
     media_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
-    is_xml = media_type in {"application/xml", "text/xml"} or body.lstrip().startswith(
-        b"<"
-    )
-    if is_xml:
-        try:
-            return parse_encrypted_envelope(body).encrypt, "xml"
-        except XMLMessageError as exc:
-            logger.warning("XML callback envelope rejected: %s", type(exc).__name__)
-            raise HTTPException(status_code=400, detail=str(exc)) from None
+    if media_type in {"application/xml", "text/xml"}:
+        return _parse_wecom_xml_envelope(body), "xml"
+    if media_type not in {"", "application/json"}:
+        raise HTTPException(status_code=415, detail="仅支持 JSON 或 XML 回调外壳")
+    return _parse_jjt_json_envelope(body), "json"
 
+
+def _parse_wecom_xml_envelope(body: bytes) -> str:
+    try:
+        return parse_encrypted_envelope(body).encrypt
+    except XMLMessageError as exc:
+        logger.warning("XML callback envelope rejected: %s", type(exc).__name__)
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+def _parse_jjt_json_envelope(body: bytes) -> str:
     try:
         raw_json: Any = json.loads(body.decode("utf-8"))
         parsed = EncryptedCallback.model_validate(raw_json)
     except (UnicodeDecodeError, json.JSONDecodeError, ValidationError, TypeError):
         logger.warning("JSON callback envelope rejected: invalid request body")
         raise HTTPException(status_code=422, detail="请求体必须包含非空 encrypt") from None
-    return parsed.encrypt, "json"
+    return parsed.encrypt
 
 
 def _parse_plaintext(
     plaintext: bytes, callback_format: CallbackFormat
 ) -> dict[str, Any]:
     if callback_format == "xml":
-        try:
-            return normalize_plaintext_xml(plaintext)
-        except XMLMessageError as exc:
-            logger.warning("XML plaintext rejected: %s", type(exc).__name__)
-            raise HTTPException(status_code=400, detail="明文不是合法企业微信 XML") from None
+        return _parse_wecom_plaintext_xml(plaintext)
+    return _parse_jjt_plaintext_json(plaintext)
 
+
+def _parse_wecom_plaintext_xml(plaintext: bytes) -> dict[str, Any]:
+    try:
+        return normalize_plaintext_xml(plaintext)
+    except XMLMessageError as exc:
+        logger.warning("XML plaintext rejected: %s", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="明文不是合法企业微信 XML") from None
+
+
+def _parse_jjt_plaintext_json(plaintext: bytes) -> dict[str, Any]:
     try:
         decoded = plaintext.decode("utf-8")
         message: Any = json.loads(decoded)

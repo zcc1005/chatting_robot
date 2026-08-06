@@ -44,7 +44,7 @@ def create_message(
             separators=(",", ":"),
         ),
         received_at=normalized_message.received_at,
-        process_status="received",
+        process_status=normalized_message.process_status,
     )
     session.add(message)
     try:
@@ -99,4 +99,3 @@ def get_message_detail(session: Session, msgid: str) -> Message | None:
         .where(Message.msgid == msgid)
     )
     return session.scalar(statement)
-
