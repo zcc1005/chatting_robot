@@ -19,7 +19,11 @@ router = APIRouter(prefix="/api/dev", tags=["开发模拟"])
 logger = logging.getLogger(__name__)
 
 
-@router.post("/mock-message", response_model=MessageCreateResult)
+@router.post(
+    "/mock-message",
+    response_model=MessageCreateResult,
+    response_model_exclude_none=True,
+)
 def create_mock_message(
     request: Request,
     payload: dict[str, Any] = Body(...),

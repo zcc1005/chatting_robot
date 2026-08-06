@@ -8,7 +8,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.database_models import Message
 from app.models.schemas import NormalizedMessage
@@ -95,7 +95,10 @@ def list_messages(
 def get_message_detail(session: Session, msgid: str) -> Message | None:
     statement = (
         select(Message)
-        .options(selectinload(Message.attachments))
+        .options(
+            selectinload(Message.attachments),
+            joinedload(Message.report_detection),
+        )
         .where(Message.msgid == msgid)
     )
     return session.scalar(statement)

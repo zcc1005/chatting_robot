@@ -137,6 +137,58 @@ https://你的公网HTTPS域名/api/jjt/callback
 - `quote` 完整保留在 `raw_payload`/`raw_json`，但暂不拼入 `text_content`；引用内容中的图片也不会重复保存为当前消息附件。
 - `voice` 和未知 `msgtype` 不触发下载、识别或 URL 执行；原始 JSON 会保存，`process_status` 记为 `unsupported`，接口不会因此返回 HTTP 500。
 
+## 施工日报初步识别
+
+消息成功写入 SQLite 后，系统会对 `text` 和 `mixed` 消息的 `text_content` 执行一次完全本地、可解释的规则识别。当前不使用大模型、机器学习、OCR 或外部 API，也不会下载图片、调用 `response_url` 或生成最终日报。纯图片、文件、语音以及没有正文的消息会安全地记为 `not_applicable`。
+
+识别结果保存在独立的 `message_report_detections` 表中，不会覆盖 `messages.raw_json`，也不会改变 `messages.process_status` 的含义。每个 `message_id` 只有一条当前识别结果；通过重识别接口重复执行时更新原记录。
+
+四种识别状态：
+
+- `report_candidate`：分数不低于 5，明显像施工日报；
+- `needs_review`：分数为 2–4，命中部分特征但信息不足，需要人工确认；
+- `ignored`：分数不高于 1，普通聊天或不像日报；
+- `not_applicable`：不是 `text`/`mixed` 正文消息，或正文为空。
+
+当前 `rules-v1` 规则与分数：
+
+| 规则 | 分数 |
+| --- | ---: |
+| 包含“施工日报”或明显的“项目日报” | +4 |
+| 包含“今日完成”“今日施工”“施工内容”或“施工进度” | +2 |
+| 包含 `2026年8月6日`、`2026-08-06`、`8月6日` 等日期 | +1 |
+| 包含“管理人员8人”“施工人员117人”“作业人员20人”等人员数量 | +1 |
+| 包含“挖掘机2台”“吊车1辆”“机械设备3台”等机械设备数量 | +1 |
+| 包含“天气晴”“晴天”“小雨”等天气描述 | +1 |
+| 包含项目、标段、工区、楼栋、隧道、桥梁等工程场景词 | +1 |
+| 去除正文首尾空白后长度不少于 30 个字符 | +1 |
+
+单独出现“日报”不会直接成为候选，所有规则都按总分阈值判断。
+
+在开发模式启动服务后，打开 Swagger <http://127.0.0.1:8000/docs>，使用 `POST /api/dev/mock-message` 提交测试消息。例如：
+
+```json
+{
+  "msgid": "manual-text-001",
+  "chatid": "construction-group-001",
+  "chattype": "group",
+  "from": {"userid": "user-001"},
+  "msgtype": "text",
+  "text": {
+    "content": "兴城项目施工日报，2026年8月6日天气晴，施工人员20人，今日完成桥梁桩基施工。"
+  }
+}
+```
+
+首次保存响应会包含 `detection_status`、`score`、`is_report_candidate`、`matched_rules` 和 `reason`。真实交建通回调仍按回调协议返回确认响应，可通过查询接口查看识别结果：
+
+- `POST /api/messages/{msgid}/detect-report`：重新识别一条已保存消息；
+- `GET /api/report-detections`：支持 `detection_status`、`chatid`、`limit`、`offset` 筛选；
+- `GET /api/report-candidates`：只查询 `report_candidate` 候选消息；
+- `GET /api/messages/{msgid}`：通过可选的 `report_detection` 字段查看该消息的识别详情。
+
+规则识别仅用于初筛。结构化提取日期、项目、人员、机械、天气和施工内容等字段属于下一阶段，本阶段尚未实现。
+
 ## 企业微信自建应用验证
 
 在企业微信管理后台创建自建应用并配置“接收消息”时：

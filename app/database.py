@@ -70,8 +70,8 @@ def init_db(runtime: DatabaseRuntime | None = None) -> None:
     active_engine = runtime.engine if runtime is not None else engine
     if active_engine is None:
         raise RuntimeError("数据库尚未配置")
-    Base.metadata.create_all(bind=active_engine)
     _migrate_process_status_constraint(active_engine)
+    Base.metadata.create_all(bind=active_engine)
 
 
 def get_db(request: Request) -> Generator[Session, None, None]:

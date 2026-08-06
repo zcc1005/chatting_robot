@@ -21,13 +21,18 @@ ENCODING_AES_KEY = base64.b64encode(AES_KEY_BYTES).decode("ascii").rstrip("=")
 WECOM_CORP_ID = "ww-test-corp-id"
 
 
-def encrypt_for_test(content: bytes, receive_id: bytes = b"") -> str:
-    plaintext = os.urandom(16) + struct.pack(">I", len(content)) + content + receive_id
+def encrypt_for_test(
+    content: bytes,
+    receive_id: bytes = b"",
+    *,
+    aes_key: bytes = AES_KEY_BYTES,
+    random_prefix: bytes | None = None,
+) -> str:
+    prefix = os.urandom(16) if random_prefix is None else random_prefix
+    plaintext = prefix + struct.pack(">I", len(content)) + content + receive_id
     padding_length = 32 - (len(plaintext) % 32)
     padded = plaintext + bytes([padding_length]) * padding_length
-    encrypted = AES.new(
-        AES_KEY_BYTES, AES.MODE_CBC, iv=AES_KEY_BYTES[:16]
-    ).encrypt(padded)
+    encrypted = AES.new(aes_key, AES.MODE_CBC, iv=aes_key[:16]).encrypt(padded)
     return base64.b64encode(encrypted).decode("ascii")
 
 
@@ -96,6 +101,13 @@ def sample_wecom_xml(msgid: str = "90001") -> bytes:
         <MsgId>{msgid}</MsgId>
         <AgentID>1000002</AgentID>
     </xml>""".encode("utf-8")
+
+
+def assert_callback_failure_not_persisted(client: TestClient, data_dir: Path) -> None:
+    messages = client.get("/api/messages")
+    assert messages.status_code == 200
+    assert messages.json()["items"] == []
+    assert list(data_dir.glob("*.jsonl")) == []
 
 
 def encrypted_wecom_envelope(encrypted: str) -> bytes:
@@ -177,6 +189,66 @@ def test_post_valid_message_returns_200(client_and_dir) -> None:
     assert response.content == b""
 
 
+def test_post_invalid_msg_signature_returns_403_without_persistence(
+    client_and_dir,
+) -> None:
+    client, data_dir = client_and_dir
+    encrypted = encrypt_for_test(
+        json.dumps(sample_message("invalid-signature-001")).encode("utf-8")
+    )
+    params = signed_params(encrypted)
+    params["msg_signature"] = "invalid-signature"
+
+    response = client.post(
+        "/api/jjt/callback", params=params, json={"encrypt": encrypted}
+    )
+
+    assert response.status_code == 403
+    assert_callback_failure_not_persisted(client, data_dir)
+
+
+def test_post_tampered_ciphertext_with_valid_signature_returns_400_without_persistence(
+    client_and_dir,
+) -> None:
+    client, data_dir = client_and_dir
+    encrypted = encrypt_for_test(
+        json.dumps(sample_message("tampered-ciphertext-001")).encode("utf-8")
+    )
+    ciphertext = bytearray(base64.b64decode(encrypted))
+    ciphertext[-AES.block_size - 1] ^= 1
+    tampered = base64.b64encode(ciphertext).decode("ascii")
+
+    response = client.post(
+        "/api/jjt/callback",
+        params=signed_params(tampered),
+        json={"encrypt": tampered},
+    )
+
+    assert response.status_code == 400
+    assert_callback_failure_not_persisted(client, data_dir)
+
+
+def test_post_ciphertext_from_wrong_aes_key_returns_400_without_persistence(
+    client_and_dir,
+) -> None:
+    client, data_dir = client_and_dir
+    wrong_key = bytes(reversed(range(32)))
+    encrypted = encrypt_for_test(
+        json.dumps(sample_message("wrong-aes-key-001")).encode("utf-8"),
+        aes_key=wrong_key,
+        random_prefix=b"\x00" * 16,
+    )
+
+    response = client.post(
+        "/api/jjt/callback",
+        params=signed_params(encrypted),
+        json={"encrypt": encrypted},
+    )
+
+    assert response.status_code == 400
+    assert_callback_failure_not_persisted(client, data_dir)
+
+
 def test_post_creates_jsonl_record(client_and_dir) -> None:
     client, data_dir = client_and_dir
     message = sample_message()
@@ -207,6 +279,22 @@ def test_post_json_callback_also_saves_sqlite(client_and_dir) -> None:
     assert detail.status_code == 200
     assert detail.json()["source"] == "jjt"
     assert detail.json()["text_content"] == "@机器人 测试消息"
+
+
+def test_post_json_callback_automatically_detects_report(client_and_dir) -> None:
+    client, _ = client_and_dir
+    message = sample_message("callback-report-001")
+    message["text"] = {
+        "content": "桥梁项目施工日报，今日完成桩基施工，施工人员20人。"
+    }
+    encrypted = encrypt_for_test(json.dumps(message).encode("utf-8"))
+    response = client.post(
+        "/api/jjt/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
+    )
+    detail = client.get("/api/messages/callback-report-001")
+    assert response.status_code == 200
+    assert detail.status_code == 200
+    assert detail.json()["report_detection"]["detection_status"] == "report_candidate"
 
 
 def test_duplicate_msgid_is_saved_once(client_and_dir) -> None:

@@ -39,11 +39,48 @@ class NormalizedMessage(BaseModel):
         return value
 
 
+DetectionStatus = Literal[
+    "report_candidate", "needs_review", "ignored", "not_applicable"
+]
+
+
 class MessageCreateResult(BaseModel):
     status: Literal["saved", "ignored"]
     msgid: str
     duplicate: bool
     database_id: int | None = None
+    detection_status: DetectionStatus | None = None
+    score: int | None = None
+    is_report_candidate: bool | None = None
+    matched_rules: list[str] | None = None
+    reason: str | None = None
+class ReportDetectionResponse(BaseModel):
+    msgid: str
+    detection_status: DetectionStatus
+    score: int
+    is_report_candidate: bool
+    matched_rules: list[str]
+    reason: str
+
+
+class ReportDetectionDetail(ReportDetectionResponse):
+    message_id: int
+    detector_version: str
+    detected_at: datetime
+    updated_at: datetime
+
+
+class ReportDetectionListItem(ReportDetectionDetail):
+    chatid: str
+    msgtype: str
+    text_content: str
+    received_at: datetime
+
+
+class ReportDetectionListResponse(BaseModel):
+    items: list[ReportDetectionListItem]
+    limit: int
+    offset: int
 
 
 class MessageListItem(BaseModel):
@@ -95,3 +132,4 @@ class MessageDetailResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     attachments: list[AttachmentDetail]
+    report_detection: ReportDetectionDetail | None = None

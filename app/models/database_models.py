@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -89,6 +90,12 @@ class Message(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    report_detection: Mapped["MessageReportDetection | None"] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
 
 
 class MessageAttachment(Base):
@@ -117,3 +124,37 @@ class MessageAttachment(Base):
     )
 
     message: Mapped[Message] = relationship(back_populates="attachments")
+
+
+class MessageReportDetection(Base):
+    __tablename__ = "message_report_detections"
+    __table_args__ = (
+        UniqueConstraint("message_id", name="uq_report_detections_message_id"),
+        CheckConstraint(
+            "detection_status IN "
+            "('report_candidate', 'needs_review', 'ignored', 'not_applicable')",
+            name="ck_report_detections_status",
+        ),
+        Index("ix_report_detections_msgid", "msgid"),
+        Index("ix_report_detections_status", "detection_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    msgid: Mapped[str] = mapped_column(String(255), nullable=False)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
+    )
+    detection_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_report_candidate: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    matched_rules: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    detector_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    message: Mapped[Message] = relationship(back_populates="report_detection")
