@@ -1,0 +1,9 @@
+{
+  "msgid": "doc-group-text-001",
+  "aibotid": "bot-001",
+  "chatid": "group-doc-001",
+  "chattype": "group",
+  "from": {"userid": "user-text"},
+  "msgtype": "text",
+  "text": {"content": "群聊施工进度正常"}
+}

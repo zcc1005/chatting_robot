@@ -1,0 +1,24 @@
+{
+  "msgid": "doc-quoted-mixed-001",
+  "aibotid": "bot-001",
+  "chatid": "group-doc-quote",
+  "chattype": "group",
+  "from": {"userid": "user-quote"},
+  "msgtype": "mixed",
+  "mixed": {
+    "msg_item": [
+      {"msgtype": "text", "text": {"content": "当前 mixed 文本"}},
+      {"msgtype": "image", "image": {"url": "mock://current-mixed-image"}}
+    ]
+  },
+  "quote": {
+    "msgid": "quoted-message-002",
+    "msgtype": "mixed",
+    "mixed": {
+      "msg_item": [
+        {"msgtype": "text", "text": {"content": "引用文本不得拼接"}},
+        {"msgtype": "image", "image": {"url": "mock://quoted-mixed-image"}}
+      ]
+    }
+  }
+}

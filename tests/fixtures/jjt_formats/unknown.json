@@ -1,0 +1,12 @@
+{
+  "msgid": "doc-unknown-001",
+  "aibotid": "bot-001",
+  "chatid": "group-doc-unknown",
+  "chattype": "group",
+  "from": {"userid": "user-unknown"},
+  "msgtype": "future_type",
+  "future_payload": {
+    "url": "mock://unknown-url-must-not-be-executed",
+    "value": "保留原文"
+  }
+}

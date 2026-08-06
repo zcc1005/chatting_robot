@@ -1,0 +1,385 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import func, select
+
+from app.config import Settings
+from app.main import create_app
+from app.models.database_models import (
+    Message,
+    ProjectReport,
+    ReportEquipment,
+    ReportWorkItem,
+)
+from app.services.llm_extraction_client import LLMClientTimeout
+from tests.conftest import sqlite_url
+
+
+class MockExtractionClient:
+    def __init__(self, responses: list[str | Exception]) -> None:
+        self.responses = responses
+        self.calls: list[str] = []
+
+    def extract(self, text_content: str) -> str:
+        self.calls.append(text_content)
+        result = self.responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def full_extraction(**overrides) -> dict[str, object]:
+    result: dict[str, object] = {
+        "project_name": "兴城桥梁项目",
+        "report_date": "2026-08-06",
+        "weather": "晴",
+        "management_count": 8,
+        "worker_count": 117,
+        "equipment": [
+            {"name": "挖掘机", "count": 2, "unit": "台"},
+            {"name": "吊车", "count": 1, "unit": "辆"},
+        ],
+        "work_items": [
+            {"location": "1号桥", "content": "桩基浇筑", "progress": "完成80%"},
+            {"location": "2号墩", "content": "钢筋绑扎", "progress": "完成50%"},
+        ],
+        "tomorrow_plan": "继续进行桩基浇筑",
+        "safety_status": "无安全事故",
+        "quality_status": "质量检查合格",
+        "missing_fields": [],
+        "confidence": 0.95,
+    }
+    result.update(overrides)
+    return result
+
+
+def report_message(
+    msgid: str,
+    content: str | None = None,
+    *,
+    chatid: str = "extraction-group",
+) -> dict[str, object]:
+    return {
+        "msgid": msgid,
+        "chatid": chatid,
+        "chattype": "group",
+        "from": {"userid": "extraction-user"},
+        "msgtype": "text",
+        "text": {
+            "content": content
+            or "兴城桥梁项目施工日报，2026年8月6日天气晴，管理人员8人，"
+            "施工人员117人，挖掘机2台，今日完成桩基浇筑。"
+        },
+    }
+
+
+@pytest.fixture
+def client_and_llm(tmp_path: Path):
+    mock_client = MockExtractionClient(
+        [json.dumps(full_extraction(), ensure_ascii=False)]
+    )
+    settings = Settings(
+        app_env="development",
+        enable_mock_api=True,
+        enable_jjt_callback=False,
+        database_url=sqlite_url(tmp_path / "extraction.db"),
+        message_data_dir=tmp_path / "messages",
+    )
+    with TestClient(create_app(settings, mock_client)) as client:
+        yield client, mock_client
+
+
+def save_candidate(client: TestClient, msgid: str, **kwargs) -> None:
+    response = client.post(
+        "/api/dev/mock-message", json=report_message(msgid, **kwargs)
+    )
+    assert response.status_code == 200
+    assert response.json()["detection_status"] == "report_candidate"
+
+
+def test_standard_report_complete_extraction(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    save_candidate(client, "complete-report")
+    assert mock_llm.calls == []
+    response = client.post("/api/messages/complete-report/extract-report")
+    body = response.json()
+    assert response.status_code == 200
+    assert body["project_name"] == "兴城桥梁项目"
+    assert body["report_date"] == "2026-08-06"
+    assert body["extraction_status"] == "completed"
+    assert body["extraction_source"] == "llm"
+    assert body["missing_fields"] == []
+    assert len(mock_llm.calls) == 1
+    assert "施工日报" in mock_llm.calls[0]
+
+
+def test_missing_weather_is_null_and_listed(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    extraction = full_extraction(weather=None, missing_fields=["weather"])
+    mock_llm.responses = [json.dumps(extraction, ensure_ascii=False)]
+    save_candidate(client, "missing-weather")
+    body = client.post("/api/messages/missing-weather/extract-report").json()
+    assert body["weather"] is None
+    assert body["missing_fields"] == ["weather"]
+    assert body["extraction_status"] == "completed"
+
+
+def test_missing_project_name_needs_review(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    extraction = full_extraction(
+        project_name=None, missing_fields=["project_name"]
+    )
+    mock_llm.responses = [json.dumps(extraction, ensure_ascii=False)]
+    save_candidate(client, "missing-project")
+    body = client.post("/api/messages/missing-project/extract-report").json()
+    assert body["project_name"] is None
+    assert body["extraction_status"] == "needs_review"
+    assert "project_name" in body["missing_fields"]
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [("report_date", None), ("work_items", None)],
+)
+def test_other_missing_critical_fields_need_review(
+    client_and_llm, field_name: str, field_value: object
+) -> None:
+    client, mock_llm = client_and_llm
+    extraction = full_extraction(
+        **{field_name: field_value, "missing_fields": [field_name]}
+    )
+    mock_llm.responses = [json.dumps(extraction, ensure_ascii=False)]
+    msgid = f"missing-{field_name}"
+    save_candidate(client, msgid)
+    body = client.post(f"/api/messages/{msgid}/extract-report").json()
+    assert body["extraction_status"] == "needs_review"
+    assert field_name in body["missing_fields"]
+
+
+def test_multiple_equipment_are_saved(client_and_llm) -> None:
+    client, _ = client_and_llm
+    save_candidate(client, "multiple-equipment")
+    body = client.post("/api/messages/multiple-equipment/extract-report").json()
+    assert body["equipment"] == [
+        {"name": "挖掘机", "count": 2, "unit": "台"},
+        {"name": "吊车", "count": 1, "unit": "辆"},
+    ]
+    with client.app.state.session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(ReportEquipment)) == 2
+
+
+def test_multiple_work_items_are_saved(client_and_llm) -> None:
+    client, _ = client_and_llm
+    save_candidate(client, "multiple-work-items")
+    body = client.post("/api/messages/multiple-work-items/extract-report").json()
+    assert [item["content"] for item in body["work_items"]] == [
+        "桩基浇筑",
+        "钢筋绑扎",
+    ]
+    with client.app.state.session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(ReportWorkItem)) == 2
+
+
+def test_ordinary_chat_is_forbidden_without_calling_llm(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    response = client.post(
+        "/api/dev/mock-message",
+        json=report_message("ordinary-chat-extraction", "明天上午九点开会"),
+    )
+    assert response.json()["detection_status"] == "ignored"
+    extract = client.post(
+        "/api/messages/ordinary-chat-extraction/extract-report"
+    )
+    assert extract.status_code == 409
+    assert mock_llm.calls == []
+
+
+def test_pure_image_is_forbidden_without_calling_llm(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    payload = {
+        "msgid": "image-extraction",
+        "chatid": "extraction-group",
+        "chattype": "group",
+        "from": {"userid": "extraction-user"},
+        "msgtype": "image",
+        "image": {"url": "mock://not-downloaded"},
+    }
+    saved = client.post("/api/dev/mock-message", json=payload)
+    assert saved.json()["detection_status"] == "not_applicable"
+    extract = client.post("/api/messages/image-extraction/extract-report")
+    assert extract.status_code == 409
+    assert mock_llm.calls == []
+
+
+@pytest.mark.parametrize("msgtype", ["file", "voice"])
+def test_file_and_voice_are_forbidden_without_calling_llm(
+    client_and_llm, msgtype: str
+) -> None:
+    client, mock_llm = client_and_llm
+    payload = {
+        "msgid": f"{msgtype}-extraction",
+        "chatid": "extraction-group",
+        "chattype": "group",
+        "from": {"userid": "extraction-user"},
+        "msgtype": msgtype,
+        msgtype: {"url": f"mock://{msgtype}-not-downloaded"},
+    }
+    client.post("/api/dev/mock-message", json=payload)
+    extract = client.post(f"/api/messages/{msgtype}-extraction/extract-report")
+    assert extract.status_code == 409
+    assert mock_llm.calls == []
+
+
+def test_needs_review_message_is_allowed_to_extract(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    saved = client.post(
+        "/api/dev/mock-message",
+        json=report_message("review-allowed", "8月6日施工进度待补充"),
+    )
+    assert saved.json()["detection_status"] == "needs_review"
+    extracted = client.post("/api/messages/review-allowed/extract-report")
+    assert extracted.status_code == 200
+    assert len(mock_llm.calls) == 1
+
+
+def test_invalid_json_is_saved_as_failed(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    mock_llm.responses = ["not-json"]
+    save_candidate(client, "invalid-json")
+    response = client.post("/api/messages/invalid-json/extract-report")
+    assert response.status_code == 502
+    detail = client.get("/api/project-reports/invalid-json").json()
+    assert detail["extraction_status"] == "failed"
+    assert detail["error_message"] == "大模型返回非法 JSON"
+    assert detail["raw_extraction_json"] == "not-json"
+
+
+def test_wrong_field_type_is_saved_as_failed(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    extraction = full_extraction(worker_count="117")
+    mock_llm.responses = [json.dumps(extraction, ensure_ascii=False)]
+    save_candidate(client, "wrong-type")
+    response = client.post("/api/messages/wrong-type/extract-report")
+    assert response.status_code == 502
+    detail = client.get("/api/project-reports/wrong-type").json()
+    assert detail["extraction_status"] == "failed"
+    assert detail["error_message"] == "大模型返回字段校验失败"
+
+
+def test_timeout_is_saved_as_failed(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    mock_llm.responses = [LLMClientTimeout("timeout")]
+    save_candidate(client, "timeout-report")
+    response = client.post("/api/messages/timeout-report/extract-report")
+    assert response.status_code == 504
+    detail = client.get("/api/project-reports/timeout-report").json()
+    assert detail["extraction_status"] == "failed"
+    assert detail["error_message"] == "大模型调用超时"
+
+
+def test_repeated_extraction_updates_one_record(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    second = full_extraction(
+        weather="小雨",
+        equipment=[{"name": "吊车", "count": 3, "unit": "辆"}],
+    )
+    mock_llm.responses.append(json.dumps(second, ensure_ascii=False))
+    save_candidate(client, "repeat-extraction")
+    first = client.post("/api/messages/repeat-extraction/extract-report").json()
+    updated = client.post("/api/messages/repeat-extraction/extract-report").json()
+    assert first["id"] == updated["id"]
+    assert updated["weather"] == "小雨"
+    assert updated["equipment"] == [{"name": "吊车", "count": 3, "unit": "辆"}]
+    with client.app.state.session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(ProjectReport)) == 1
+        assert session.scalar(select(func.count()).select_from(ReportEquipment)) == 1
+
+
+def test_manual_patch_updates_fields_and_source(client_and_llm) -> None:
+    client, _ = client_and_llm
+    save_candidate(client, "manual-patch")
+    client.post("/api/messages/manual-patch/extract-report")
+    response = client.patch(
+        "/api/project-reports/manual-patch",
+        json={
+            "project_name": "人工修正项目",
+            "worker_count": 120,
+            "work_items": [
+                {
+                    "location": "3号墩",
+                    "content": "模板安装",
+                    "progress": None,
+                }
+            ],
+        },
+    )
+    body = response.json()
+    assert response.status_code == 200
+    assert body["project_name"] == "人工修正项目"
+    assert body["worker_count"] == 120
+    assert body["work_items"][0]["content"] == "模板安装"
+    assert body["extraction_source"] == "manual"
+    assert body["extraction_status"] == "completed"
+
+
+def test_missing_message_returns_404(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    response = client.post("/api/messages/not-found/extract-report")
+    assert response.status_code == 404
+    assert mock_llm.calls == []
+
+
+def test_unconfigured_llm_does_not_prevent_startup(tmp_path: Path) -> None:
+    settings = Settings(
+        app_env="development",
+        enable_mock_api=True,
+        enable_jjt_callback=False,
+        database_url=sqlite_url(tmp_path / "unconfigured.db"),
+        message_data_dir=tmp_path / "messages",
+    )
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/health").status_code == 200
+        save_candidate(client, "unconfigured-llm")
+        response = client.post("/api/messages/unconfigured-llm/extract-report")
+    assert response.status_code == 503
+    assert "未配置大模型" in response.json()["detail"]
+
+
+def test_failed_extraction_does_not_change_original_message(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    mock_llm.responses = ["invalid"]
+    payload = report_message("preserved-message")
+    client.post("/api/dev/mock-message", json=payload)
+    client.post("/api/messages/preserved-message/extract-report")
+    message = client.get("/api/messages/preserved-message").json()
+    assert message["raw_payload"] == payload
+    assert message["report_detection"]["detection_status"] == "report_candidate"
+    with client.app.state.session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Message)) == 1
+
+
+def test_project_report_list_filters(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    second = full_extraction(project_name="另一项目", report_date="2026-08-07")
+    mock_llm.responses.append(json.dumps(second, ensure_ascii=False))
+    save_candidate(client, "filter-first", chatid="target-chat")
+    client.post("/api/messages/filter-first/extract-report")
+    save_candidate(client, "filter-second", chatid="other-chat")
+    client.post("/api/messages/filter-second/extract-report")
+    response = client.get(
+        "/api/project-reports",
+        params={
+            "project_name": "兴城桥梁项目",
+            "report_date": "2026-08-06",
+            "extraction_status": "completed",
+            "chatid": "target-chat",
+        },
+    )
+    assert response.status_code == 200
+    assert [item["msgid"] for item in response.json()["items"]] == [
+        "filter-first"
+    ]

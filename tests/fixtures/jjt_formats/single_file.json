@@ -1,0 +1,8 @@
+{
+  "msgid": "doc-single-file-001",
+  "aibotid": "bot-001",
+  "chattype": "single",
+  "from": {"userid": "user-single-file"},
+  "msgtype": "file",
+  "file": {"url": "mock://single-file-001", "md5": "doc-file-md5"}
+}

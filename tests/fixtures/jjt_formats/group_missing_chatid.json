@@ -1,0 +1,8 @@
+{
+  "msgid": "doc-group-no-chatid-001",
+  "aibotid": "bot-001",
+  "chattype": "group",
+  "from": {"userid": "user-group"},
+  "msgtype": "text",
+  "text": {"content": "群聊缺少 chatid"}
+}

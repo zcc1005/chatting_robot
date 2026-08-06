@@ -1,0 +1,8 @@
+{
+  "msgid": "doc-single-image-001",
+  "aibotid": "bot-001",
+  "chattype": "single",
+  "from": {"userid": "user-single-image"},
+  "msgtype": "image",
+  "image": {"url": "mock://single-image-001"}
+}

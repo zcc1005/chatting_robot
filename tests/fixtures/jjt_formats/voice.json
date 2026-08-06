@@ -1,0 +1,12 @@
+{
+  "msgid": "doc-voice-001",
+  "aibotid": "bot-001",
+  "chatid": "group-doc-voice",
+  "chattype": "group",
+  "from": {"userid": "user-voice"},
+  "msgtype": "voice",
+  "voice": {
+    "url": "mock://voice-must-not-be-downloaded",
+    "duration": 12
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "msgid": "doc-quoted-text-001",
+  "aibotid": "bot-001",
+  "chatid": "group-doc-quote",
+  "chattype": "group",
+  "from": {"userid": "user-quote"},
+  "msgtype": "text",
+  "text": {"content": "这是当前文本"},
+  "quote": {
+    "msgid": "quoted-message-001",
+    "msgtype": "image",
+    "image": {"url": "mock://quoted-image-must-not-be-attachment"}
+  }
+}
