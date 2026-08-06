@@ -187,7 +187,79 @@ https://你的公网HTTPS域名/api/jjt/callback
 - `GET /api/report-candidates`：只查询 `report_candidate` 候选消息；
 - `GET /api/messages/{msgid}`：通过可选的 `report_detection` 字段查看该消息的识别详情。
 
-规则识别仅用于初筛。结构化提取日期、项目、人员、机械、天气和施工内容等字段属于下一阶段，本阶段尚未实现。
+规则识别仅用于初筛，只有 `report_candidate` 和 `needs_review` 可以进入下面的单条日报结构化提取流程。
+
+## 单条施工日报结构化字段提取
+
+结构化提取只通过 `POST /api/messages/{msgid}/extract-report` 手动触发。消息接收和规则识别阶段绝不会自动调用大模型，因此启动服务、接收回调、提交模拟消息和运行普通测试都不会产生大模型费用。
+
+处理流程如下：
+
+1. 查询消息及其初步识别结果；
+2. 拒绝 `ignored`、`not_applicable`、纯图片、文件、语音和空正文；
+3. 在 `project_reports` 中创建或更新唯一的 `pending` 记录；
+4. 独立大模型客户端只接收 `text_content`，要求返回纯 JSON；
+5. 使用严格 Pydantic 模型校验 JSON、字段类型、额外字段和缺失字段一致性；
+6. 成功时更新主记录，并替换 `report_equipment`、`report_work_items` 子项；
+7. 非法 JSON、字段类型错误、响应错误或超时会将当前结果更新为 `failed`，不会修改或删除原消息和初步识别结果。
+
+结构化字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `project_name` | 原文明确给出的项目名称 |
+| `report_date` | 日报日期，API 使用 `YYYY-MM-DD` |
+| `weather` | 原文天气描述 |
+| `management_count` | 管理人员数量 |
+| `worker_count` | 施工或作业人员数量 |
+| `equipment` | 机械列表，每项包含 `name`、`count`、`unit` |
+| `work_items` | 施工项列表，每项包含 `location`、`content`、`progress` |
+| `tomorrow_plan` | 明日计划 |
+| `safety_status` | 安全情况 |
+| `quality_status` | 质量情况 |
+| `missing_fields` | 原文未提供的结构化字段名 |
+| `confidence` | 大模型给出的 0–1 提取置信度；人工结果可以为空 |
+| `extraction_status` | `pending`、`completed`、`needs_review` 或 `failed` |
+| `extraction_source` | `llm` 或 `manual` |
+| `raw_extraction_json` | 大模型原始返回文本，仅存储，不执行 |
+
+原文没有提供的标量字段必须返回 `null`；没有机械或施工项时，相应字段也必须为 `null`。这些字段必须同时列入 `missing_fields`，不能使用空字符串、空数组或编造的默认值。服务会复核 `missing_fields` 与所有 `null` 字段是否完全一致。缺少 `project_name`、`report_date` 或 `work_items` 任一关键字段时，即使其他字段校验通过，状态仍为 `needs_review`。
+
+大模型使用兼容 Chat Completions 的接口，所有配置均来自 `.env`，项目没有硬编码 API Key、模型名或 base URL：
+
+```dotenv
+LLM_API_KEY=替换为服务端密钥
+LLM_MODEL=替换为模型名称
+LLM_BASE_URL=https://你的兼容服务地址/v1
+LLM_TIMEOUT_SECONDS=30
+```
+
+前三项未完整配置时，服务仍能正常启动，健康检查、消息接收和本地识别不受影响；手动提取接口会返回 HTTP 503 和明确配置提示。日志不会输出 API Key、`response_url` 或完整日报正文。
+
+在 Swagger <http://127.0.0.1:8000/docs> 中：
+
+- 调用 `POST /api/messages/{msgid}/extract-report` 手动触发单条提取；
+- 调用 `GET /api/project-reports/{msgid}` 查询一条结果；
+- 调用 `GET /api/project-reports` 查询结果，支持 `project_name`、`report_date`、`extraction_status`、`chatid`、`limit`、`offset`；
+- 调用 `PATCH /api/project-reports/{msgid}` 人工修正字段，保存后 `extraction_source` 自动变为 `manual`。
+
+人工修正示例：
+
+```json
+{
+  "project_name": "人工确认后的项目名称",
+  "worker_count": 120,
+  "work_items": [
+    {
+      "location": "3号墩",
+      "content": "模板安装",
+      "progress": null
+    }
+  ]
+}
+```
+
+当前只处理单条日报，不进行跨消息、多项目汇总，也不生成最终日报。多项目汇总属于下一阶段。
 
 ## 企业微信自建应用验证
 

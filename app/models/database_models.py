@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -96,6 +98,12 @@ class Message(Base):
         passive_deletes=True,
         uselist=False,
     )
+    project_report: Mapped["ProjectReport | None"] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
 
 
 class MessageAttachment(Base):
@@ -158,3 +166,94 @@ class MessageReportDetection(Base):
     )
 
     message: Mapped[Message] = relationship(back_populates="report_detection")
+
+
+class ProjectReport(Base):
+    __tablename__ = "project_reports"
+    __table_args__ = (
+        UniqueConstraint("message_id", name="uq_project_reports_message_id"),
+        CheckConstraint(
+            "extraction_status IN ('pending', 'completed', 'needs_review', 'failed')",
+            name="ck_project_reports_extraction_status",
+        ),
+        CheckConstraint(
+            "extraction_source IN ('llm', 'manual')",
+            name="ck_project_reports_extraction_source",
+        ),
+        Index("ix_project_reports_msgid", "msgid"),
+        Index("ix_project_reports_project_name", "project_name"),
+        Index("ix_project_reports_report_date", "report_date"),
+        Index("ix_project_reports_extraction_status", "extraction_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    msgid: Mapped[str] = mapped_column(String(255), nullable=False)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
+    )
+    project_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    report_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    weather: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    management_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    worker_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tomorrow_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
+    safety_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quality_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    missing_fields: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    extraction_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    extraction_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    raw_extraction_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    message: Mapped[Message] = relationship(back_populates="project_report")
+    equipment: Mapped[list["ReportEquipment"]] = relationship(
+        back_populates="project_report",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ReportEquipment.position",
+    )
+    work_items: Mapped[list["ReportWorkItem"]] = relationship(
+        back_populates="project_report",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ReportWorkItem.position",
+    )
+
+
+class ReportEquipment(Base):
+    __tablename__ = "report_equipment"
+    __table_args__ = (Index("ix_report_equipment_report_id", "project_report_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_report_id: Mapped[int] = mapped_column(
+        ForeignKey("project_reports.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    project_report: Mapped[ProjectReport] = relationship(back_populates="equipment")
+
+
+class ReportWorkItem(Base):
+    __tablename__ = "report_work_items"
+    __table_args__ = (Index("ix_report_work_items_report_id", "project_report_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_report_id: Mapped[int] = mapped_column(
+        ForeignKey("project_reports.id", ondelete="CASCADE"), nullable=False
+    )
+    location: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    progress: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    project_report: Mapped[ProjectReport] = relationship(back_populates="work_items")

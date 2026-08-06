@@ -29,6 +29,16 @@ def _read_bool(name: str, default: bool) -> bool:
     raise ConfigurationError(f"{name} 必须是 true 或 false")
 
 
+def _read_float(name: str, default: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        return float(raw_value)
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} 必须是数字") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     # 显式构造 Settings 时默认保留历史回调行为；from_env 使用离线开发默认值。
@@ -42,6 +52,10 @@ class Settings:
     enable_mock_api: bool = False
     enable_jjt_callback: bool = True
     database_url: str = "sqlite:///./data/jjt_bot.db"
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_base_url: str = ""
+    llm_timeout_seconds: float = 30.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -61,6 +75,10 @@ class Settings:
             database_url=os.getenv(
                 "DATABASE_URL", "sqlite:///./data/jjt_bot.db"
             ),
+            llm_api_key=os.getenv("LLM_API_KEY", ""),
+            llm_model=os.getenv("LLM_MODEL", ""),
+            llm_base_url=os.getenv("LLM_BASE_URL", ""),
+            llm_timeout_seconds=_read_float("LLM_TIMEOUT_SECONDS", 30.0),
         )
         settings.validate()
         return settings
@@ -69,6 +87,13 @@ class Settings:
     def mock_api_available(self) -> bool:
         return self.app_env.lower() == "development" and self.enable_mock_api
 
+    @property
+    def llm_configured(self) -> bool:
+        return all(
+            value.strip()
+            for value in (self.llm_api_key, self.llm_model, self.llm_base_url)
+        )
+
     def validate(self) -> None:
         if not self.app_env.strip():
             raise ConfigurationError("APP_ENV 不能为空")
@@ -76,6 +101,8 @@ class Settings:
             raise ConfigurationError("DATABASE_URL 本阶段必须使用 SQLite")
         if not self.message_data_dir:
             raise ConfigurationError("JJT_MESSAGE_DATA_DIR 不能为空")
+        if self.llm_timeout_seconds <= 0:
+            raise ConfigurationError("LLM_TIMEOUT_SECONDS 必须大于 0")
         resolved_log_level = getattr(logging, self.log_level.upper(), None)
         if not isinstance(resolved_log_level, int):
             raise ConfigurationError(f"无效的 JJT_LOG_LEVEL: {self.log_level}")
@@ -110,4 +137,3 @@ class Settings:
             raise ConfigurationError(
                 "JJT_ENCODING_AES_KEY 解码后必须是 32 字节"
             )
-
