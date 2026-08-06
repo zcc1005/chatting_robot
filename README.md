@@ -259,7 +259,50 @@ LLM_TIMEOUT_SECONDS=30
 }
 ```
 
-当前只处理单条日报，不进行跨消息、多项目汇总，也不生成最终日报。多项目汇总属于下一阶段。
+单条结构化结果可以进入下一节的确定性汇总预览，但项目字段提取本身仍不会自动触发。
+
+## 按群聊和日期生成 Markdown 汇总预览
+
+汇总范围由 `chatid + report_date` 精确确定。程序查询该范围内的 `project_reports`，只让非重复且 `extraction_status=completed` 的日报进入项目数量、人员和机械统计。`needs_review`、`failed`、`pending` 不进入数值汇总，但会出现在 `warnings`、`review_reports` 和 Markdown 的“待确认和缺失信息”部分。
+
+统计全部由确定性 Python 代码完成，不调用大模型，也不访问外部 API：
+
+- `project_count` 表示实际纳入汇总展示的非重复 completed 项目数，并进一步拆分为字段完整的 `fully_complete_project_count` 和仍有缺失信息的 `partial_project_count`，三者始终满足 `project_count = fully_complete_project_count + partial_project_count`；
+- 管理人员和施工人员只累加非空的已知数量；`null` 不会当作 0，如果部分项目缺失则结果明确标为“仅汇总已知数据”，全部缺失时总数为 `null`；
+- 机械按 `name + unit` 分组，同名但单位不同的机械不会合并；
+- 各项目施工内容、明日计划、安全和质量情况按保存的结构化字段展示；
+- 原有 `missing_fields` 以及实际检测到的空字段都会进入缺失信息和警告。
+
+系统按 `project_name + report_date` 检查重复。只要同一项目同一天关联多条结构化日报，相关记录全部暂不进入数值合计，项目会进入 `duplicate_projects`，返回每条来源的 `msgid` 和 `project_report_id`，汇总状态设置为 `needs_review`，等待人工先处理单条日报。
+
+汇总状态：
+
+- `completed`：来源均为可用的非重复 completed 日报，且没有缺失或待确认警告；
+- `needs_review`：存在重复、非 completed 来源、字段缺失或没有有效日报。
+
+预览请求：
+
+```http
+POST /api/daily-reports/preview
+Content-Type: application/json
+```
+
+```json
+{
+  "chatid": "construction-group-001",
+  "report_date": "2026-08-06"
+}
+```
+
+预览只读取数据并返回统计结果、来源、重复项、警告和 Markdown，不写入 `daily_report_summaries`。人工检查后，可使用同样请求体调用 `POST /api/daily-reports` 保存当前快照。
+
+查询接口：
+
+- `GET /api/daily-reports`：支持 `chatid`、`report_date`、`generation_status`、`limit`、`offset`；
+- `GET /api/daily-reports/{summary_id}`：返回保存时的来源快照和 Markdown；
+- 相同 `chatid + report_date` 可以重复保存，每次都会生成新的快照，并通过 `daily_report_summary_items` 保存当次来源及顺序，不覆盖历史记录。
+
+Markdown 固定包含标题日期、总体人数、机械汇总、各项目施工情况、明日计划、安全质量以及待确认和缺失信息。当前仅生成供人工检查的预览和快照，不生成正式对外日报，不调用 `response_url`，也不会发送任何群消息。
 
 ## 企业微信自建应用验证
 

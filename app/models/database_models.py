@@ -225,6 +225,9 @@ class ProjectReport(Base):
         passive_deletes=True,
         order_by="ReportWorkItem.position",
     )
+    summary_items: Mapped[list["DailyReportSummaryItem"]] = relationship(
+        back_populates="project_report"
+    )
 
 
 class ReportEquipment(Base):
@@ -257,3 +260,83 @@ class ReportWorkItem(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     project_report: Mapped[ProjectReport] = relationship(back_populates="work_items")
+
+
+class DailyReportSummary(Base):
+    __tablename__ = "daily_report_summaries"
+    __table_args__ = (
+        CheckConstraint(
+            "project_count >= 0",
+            name="ck_daily_summaries_project_count_nonnegative",
+        ),
+        CheckConstraint(
+            "management_total IS NULL OR management_total >= 0",
+            name="ck_daily_summaries_management_total_nonnegative",
+        ),
+        CheckConstraint(
+            "worker_total IS NULL OR worker_total >= 0",
+            name="ck_daily_summaries_worker_total_nonnegative",
+        ),
+        CheckConstraint(
+            "generation_status IN ('completed', 'needs_review')",
+            name="ck_daily_summaries_generation_status",
+        ),
+        Index("ix_daily_summaries_chatid", "chatid"),
+        Index("ix_daily_summaries_report_date", "report_date"),
+        Index("ix_daily_summaries_generation_status", "generation_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chatid: Mapped[str] = mapped_column(String(255), nullable=False)
+    report_date: Mapped[date] = mapped_column(Date, nullable=False)
+    project_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    management_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    worker_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    generation_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    markdown_content: Mapped[str] = mapped_column(Text, nullable=False)
+    warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    items: Mapped[list["DailyReportSummaryItem"]] = relationship(
+        back_populates="summary",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="DailyReportSummaryItem.display_order",
+    )
+
+
+class DailyReportSummaryItem(Base):
+    __tablename__ = "daily_report_summary_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "summary_id",
+            "project_report_id",
+            name="uq_daily_summary_items_source",
+        ),
+        CheckConstraint(
+            "display_order >= 0",
+            name="ck_daily_summary_items_display_order_nonnegative",
+        ),
+        Index("ix_daily_summary_items_summary_id", "summary_id"),
+        Index("ix_daily_summary_items_project_report_id", "project_report_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    summary_id: Mapped[int] = mapped_column(
+        ForeignKey("daily_report_summaries.id", ondelete="CASCADE"), nullable=False
+    )
+    project_report_id: Mapped[int] = mapped_column(
+        ForeignKey("project_reports.id"), nullable=False
+    )
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    summary: Mapped[DailyReportSummary] = relationship(back_populates="items")
+    project_report: Mapped[ProjectReport] = relationship(
+        back_populates="summary_items"
+    )

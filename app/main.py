@@ -8,6 +8,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 
 from app.api.callback import router as callback_router
+from app.api.daily_reports import router as daily_reports_router
 from app.api.messages import router as messages_router
 from app.api.mock import router as mock_router
 from app.api.project_reports import router as project_reports_router
@@ -78,6 +79,7 @@ def create_app(
     application.include_router(messages_router)
     application.include_router(report_detections_router)
     application.include_router(project_reports_router)
+    application.include_router(daily_reports_router)
     if active_settings.mock_api_available:
         application.include_router(mock_router)
     if active_settings.enable_jjt_callback:
