@@ -1,0 +1,14 @@
+{
+  "msgid": "mock-text-001",
+  "aibotid": "bot-001",
+  "chatid": "construction-group-001",
+  "chattype": "group",
+  "from": {
+    "userid": "user-001"
+  },
+  "response_url": "https://example.invalid/response/path?token=secret",
+  "msgtype": "text",
+  "text": {
+    "content": "兴城项目2026年8月5日施工日报，天气晴，管理人员8人，施工人员117人，挖掘机2台，今日完成1号楼基础钢筋绑扎。"
+  }
+}

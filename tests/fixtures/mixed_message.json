@@ -1,0 +1,38 @@
+{
+  "msgid": "mock-mixed-001",
+  "aibotid": "bot-001",
+  "chatid": "construction-group-001",
+  "chattype": "group",
+  "from": {
+    "userid": "user-001"
+  },
+  "msgtype": "mixed",
+  "mixed": {
+    "msg_item": [
+      {
+        "msgtype": "text",
+        "text": {
+          "content": "兴城项目施工日报"
+        }
+      },
+      {
+        "msgtype": "image",
+        "image": {
+          "url": "mock://image-001"
+        }
+      },
+      {
+        "msgtype": "text",
+        "text": {
+          "content": "今日完成1号楼基础钢筋绑扎。"
+        }
+      },
+      {
+        "msgtype": "image",
+        "image": {
+          "url": "mock://image-002"
+        }
+      }
+    ]
+  }
+}

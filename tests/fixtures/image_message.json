@@ -1,0 +1,14 @@
+{
+  "msgid": "mock-image-001",
+  "aibotid": "bot-001",
+  "chatid": "construction-group-001",
+  "chattype": "group",
+  "from": {
+    "userid": "user-001"
+  },
+  "msgtype": "image",
+  "image": {
+    "url": "mock://image-001",
+    "md5": "image-md5-001"
+  }
+}

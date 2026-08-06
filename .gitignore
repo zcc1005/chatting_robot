@@ -1,0 +1,12 @@
+.env
+.idea/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+data/messages/*.jsonl
+!data/messages/.gitkeep
+data/*.db
+data/*.db-*
