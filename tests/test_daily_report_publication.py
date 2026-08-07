@@ -171,6 +171,83 @@ def _send(client: TestClient, summary_id: int, trigger_msgid: str):
     )
 
 
+def _create_mock_trigger(
+    client: TestClient,
+    summary_id: int,
+    *,
+    chatid: str = CHATID,
+    extra: dict | None = None,
+):
+    payload = {"chatid": chatid, "summary_id": summary_id}
+    if extra:
+        payload.update(extra)
+    return client.post("/api/dev/mock-trigger-message", json=payload)
+
+
+def test_development_can_create_unique_mock_trigger(publication_client) -> None:
+    summary_id = _save_summary(publication_client)["id"]
+    first = _create_mock_trigger(publication_client, summary_id)
+    second = _create_mock_trigger(publication_client, summary_id)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["status"] == "saved"
+    assert first.json()["summary_id"] == summary_id
+    assert first.json()["chatid"] == CHATID
+    assert first.json()["trigger_msgid"] != second.json()["trigger_msgid"]
+    assert "response_url" not in first.json()
+    with publication_client.app.state.session_factory() as session:
+        message = session.scalar(
+            select(Message).where(Message.msgid == first.json()["trigger_msgid"])
+        )
+        assert message is not None
+        assert message.response_url is not None
+        assert message.response_url.startswith("mock://response-url/")
+        stored_response_url = message.response_url
+    detail = publication_client.get(
+        f"/api/messages/{first.json()['trigger_msgid']}"
+    )
+    assert detail.status_code == 200
+    assert detail.json()["response_url"] == "[REDACTED]"
+    assert stored_response_url not in json.dumps(detail.json(), ensure_ascii=False)
+
+
+def test_mock_trigger_rejects_user_supplied_response_url(publication_client) -> None:
+    summary_id = _save_summary(publication_client)["id"]
+    response = _create_mock_trigger(
+        publication_client,
+        summary_id,
+        extra={"response_url": "https://attacker.invalid/callback"},
+    )
+
+    assert response.status_code == 422
+    with publication_client.app.state.session_factory() as session:
+        assert session.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(Message.msgid.like("dev-trigger-%"))
+        ) == 0
+
+
+def test_confirmed_summary_can_send_via_generated_mock_trigger(
+    publication_client,
+) -> None:
+    summary_id = _save_summary(publication_client)["id"]
+    _confirm(publication_client, summary_id)
+    trigger = _create_mock_trigger(publication_client, summary_id)
+    response = _send(
+        publication_client,
+        summary_id,
+        trigger.json()["trigger_msgid"],
+    )
+
+    assert trigger.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["publication_status"] == "sent"
+    assert response.json()["attempt"]["transport"] == "mock"
+    assert response.json()["attempt"]["send_status"] == "sent"
+    assert response.json()["sent_at"] is not None
+
+
 def test_draft_summary_can_be_confirmed(publication_client) -> None:
     summary = _save_summary(publication_client)
     assert summary["publication_status"] == "draft"
@@ -405,8 +482,14 @@ def test_default_configuration_never_calls_http(publication_client, monkeypatch)
         raise AssertionError("默认 Mock 模式不得访问网络")
 
     monkeypatch.setattr(socket, "create_connection", fail_if_called)
-    summary_id, trigger_msgid = _prepare_confirmed(publication_client)
-    response = _send(publication_client, summary_id, trigger_msgid)
+    summary_id = _save_summary(publication_client)["id"]
+    _confirm(publication_client, summary_id)
+    trigger = _create_mock_trigger(publication_client, summary_id)
+    response = _send(
+        publication_client,
+        summary_id,
+        trigger.json()["trigger_msgid"],
+    )
     assert response.status_code == 200
     assert response.json()["attempt"]["transport"] == "mock"
 

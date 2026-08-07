@@ -113,5 +113,20 @@ def test_production_does_not_register_mock_api(tmp_path: Path, load_message_fixt
     assert response.status_code == 404
 
 
+def test_production_does_not_register_mock_trigger_api(tmp_path: Path) -> None:
+    settings = Settings(
+        app_env="production",
+        enable_mock_api=True,
+        enable_jjt_callback=False,
+        database_url=sqlite_url(tmp_path / "production-trigger.db"),
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/api/dev/mock-trigger-message",
+            json={"chatid": "construction-group-001", "summary_id": 1},
+        )
+    assert response.status_code == 404
+
+
 def test_callback_route_absent_when_disabled(mock_client) -> None:
     assert mock_client.get("/api/jjt/callback").status_code == 404

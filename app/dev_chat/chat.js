@@ -3,6 +3,7 @@
 const page = document.body;
 const endpoints = {
   mock: page.dataset.mockEndpoint,
+  mockTrigger: page.dataset.mockTriggerEndpoint,
   messages: page.dataset.messagesEndpoint,
   detections: page.dataset.detectionsEndpoint,
   reports: page.dataset.projectReportsEndpoint,
@@ -62,6 +63,15 @@ const publicationLabels = {
   sending: "处理中",
   sent: "已发送",
   send_failed: "处理失败",
+};
+const sendStatusLabels = {
+  sending: "发送中",
+  sent: "发送成功",
+  send_failed: "发送失败",
+};
+const transportLabels = {
+  mock: "本地 Mock",
+  real: "真实传输",
 };
 const fieldLabels = {
   project_name: "项目名称",
@@ -177,7 +187,7 @@ function sanitized(value) {
 
 function redactSensitiveText(value) {
   return value
-    .replace(/https?:\/\/[^\s"']+/gi, "[链接已隐藏]")
+    .replace(/(?:https?|mock):\/\/[^\s"']+/gi, "[链接已隐藏]")
     .replace(
       /((?:api[-_ ]?key|token|encodingaeskey|secret)\s*[:=]\s*)[^\s,;]+/gi,
       "$1[已隐藏]",
@@ -244,6 +254,12 @@ function toChineseError(status, body, operation) {
     if (status === 504) return `结构化提取失败：${backendDetail || "大模型调用超时"}。可稍后手动重试。`;
     if (status === 502) return `结构化提取失败：大模型返回了无效结果。${backendDetail}`;
     if (status === 409) return "这条消息不是日报候选或需要人工确认的文本消息，不能执行结构化提取。";
+  }
+  if (status === 409 && operation === "模拟发送汇总日报") {
+    return `模拟发送未执行：${backendDetail || "请确认快照已人工确认，且当前没有正在进行或已经完成的发送。"}`;
+  }
+  if (status === 409 && operation === "创建本地模拟触发消息") {
+    return `无法创建模拟触发消息：${backendDetail || "所选群聊与汇总快照不一致。"}`;
   }
   if (status === 0) return "无法连接本地服务，请确认应用仍在运行。";
   if (status === 404) return `${operation}失败：目标数据不存在或当前环境未启用此功能。`;
@@ -815,76 +831,162 @@ async function previewSummary(options = {}) {
   }
 }
 
-function renderConfirmationCard(summary, container) {
-  const existing = container.querySelector(".confirmation-card");
-  if (existing) existing.remove();
+function codedLabel(value, labels) {
+  return `${labels[value] || display(value)}（${display(value)}）`;
+}
 
-  const card = node("section", "confirmation-card");
-  const top = node("div", "detection-top");
-  top.append(
-    node("h4", "", "人工确认汇总快照"),
-    statusPill(summary.publication_status, publicationLabels),
-  );
-  card.append(top);
-  card.append(node(
-    "p",
-    "",
-    "请先核对预览中的告警、重复项目和缺失字段。确认表示该快照已由人工检查，只更新本地状态，不会发送任何群消息。",
-  ));
+function renderSendOutcome(summary, sendResult) {
+  const section = node("section", "send-outcome");
+  section.append(node("strong", "", sendResult.attempt.send_status === "sent" ? "模拟发送成功" : "模拟发送未成功"));
+  const grid = node("dl", "data-grid send-data-grid");
+  addDataItem(grid, "汇总发布状态", codedLabel(sendResult.publication_status, publicationLabels));
+  addDataItem(grid, "传输方式", codedLabel(sendResult.attempt.transport, transportLabels));
+  addDataItem(grid, "发送状态", codedLabel(sendResult.attempt.send_status, sendStatusLabels));
+  addDataItem(grid, "发送完成时间", summary.sent_at ? timeLabel(summary.sent_at) : "未完成");
+  section.append(grid, node("p", "mock-only-note", "仅本地 Mock，未发送真实群聊。"));
+  return section;
+}
 
-  if (summary.publication_status === "confirmed") {
-    const meta = node("div", "confirmation-meta");
-    meta.append(
-      node("div", "", `确认人：${display(summary.confirmed_by)}`),
-      node("div", "", `确认时间：${timeLabel(summary.confirmed_at)}`),
-      node("div", "", `确认备注：${display(summary.confirmation_note, "无")}`),
+function renderSendAttempts(items, container) {
+  container.replaceChildren();
+  if (!Array.isArray(items) || !items.length) {
+    container.append(node("div", "empty-attempts", "暂无发送记录。"));
+    return;
+  }
+  items.forEach((attempt, index) => {
+    const card = node("article", "send-attempt-card");
+    const heading = node("div", "detection-top");
+    heading.append(
+      node("strong", "", `第 ${items.length - index} 次发送`),
+      statusPill(attempt.send_status, sendStatusLabels),
     );
-    card.append(meta);
-    const actions = node("div", "confirmation-actions");
-    actions.append(button("取消人工确认", "secondary-button", async event => {
-      const target = event.currentTarget;
-      target.disabled = true;
-      try {
-        const updated = await apiRequest(
-          `${endpoints.summaries}/${summary.id}/unconfirm`,
-          { method: "POST", debugBody: {} },
-          "取消人工确认",
-        );
-        renderConfirmationCard(updated, container);
-        showToast(`汇总快照 ${summary.id} 已退回待确认状态。`);
-      } catch (error) {
-        showToast(error.message, true);
-      } finally {
-        target.disabled = false;
-      }
-    }));
-    card.append(actions);
-  } else {
-    const confirmerId = `confirmed-by-${summary.id}`;
-    const noteId = `confirmation-note-${summary.id}`;
-    const confirmerField = node("label", "field");
-    confirmerField.htmlFor = confirmerId;
-    confirmerField.append(node("span", "", "确认人 ID"));
-    const confirmer = node("input");
-    confirmer.id = confirmerId;
-    confirmer.name = "confirmed_by";
-    confirmer.maxLength = 255;
-    confirmer.value = senderUserid.value;
-    confirmerField.append(confirmer);
+    const grid = node("dl", "data-grid send-data-grid");
+    addDataItem(grid, "开始时间", timeLabel(attempt.attempted_at));
+    addDataItem(grid, "完成时间", attempt.completed_at ? timeLabel(attempt.completed_at) : "尚未完成");
+    addDataItem(grid, "传输方式", codedLabel(attempt.transport, transportLabels));
+    addDataItem(grid, "发送状态", codedLabel(attempt.send_status, sendStatusLabels));
+    addDataItem(grid, "HTTP 状态码", attempt.http_status_code ?? "无");
+    addDataItem(grid, "错误类型", attempt.error_type || "无");
+    addDataItem(grid, "错误说明", attempt.error_message || "无", true);
+    addDataItem(grid, "响应地址", "已脱敏", true);
+    card.append(heading, grid);
+    container.append(card);
+  });
+}
 
-    const noteField = node("label", "field");
-    noteField.htmlFor = noteId;
-    noteField.append(node("span", "", "确认备注（可选）"));
-    const note = node("textarea");
-    note.id = noteId;
-    note.name = "confirmation_note";
-    note.maxLength = 2000;
-    note.placeholder = "例如：已核对三条项目日报及人数、机械汇总";
-    noteField.append(note);
-    card.append(confirmerField, noteField);
+async function viewSendAttempts(summary, container, target) {
+  target.disabled = true;
+  try {
+    const result = await apiRequest(
+      `${endpoints.summaries}/${summary.id}/send-attempts`,
+      {},
+      "查看发送记录",
+    );
+    renderSendAttempts(result.items, container);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    target.disabled = false;
+  }
+}
 
-    const actions = node("div", "confirmation-actions");
-    actions.append(button("我已核对，确认汇总", "primary-button", async event => {
+function renderMockSendChatMessage(summary, sendResult) {
+  const previous = messageList.querySelector(`.mock-send-message[data-summary-id="${summary.id}"]`);
+  if (previous) previous.remove();
+
+  const row = node("article", "message-row system mock-send-message");
+  row.dataset.summaryId = String(summary.id);
+  row.append(node("div", "avatar", "发送"));
+  const body = node("div", "message-body");
+  const meta = node("div", "message-meta");
+  meta.append(
+    node("span", "", "日报机器人"),
+    node("span", "", "刚刚"),
+    node("span", "preview-only-badge", "仅本地 Mock · 未发送真实群聊"),
+  );
+  const bubble = node("div", "bubble mock-send-bubble");
+  bubble.append(node("strong", "", "模拟发送成功"));
+  const grid = node("dl", "data-grid send-data-grid");
+  addDataItem(grid, "汇总快照", `#${summary.id}`);
+  addDataItem(grid, "汇总发布状态", codedLabel(sendResult.publication_status, publicationLabels));
+  addDataItem(grid, "传输方式", codedLabel(sendResult.attempt.transport, transportLabels));
+  addDataItem(grid, "发送状态", codedLabel(sendResult.attempt.send_status, sendStatusLabels));
+  addDataItem(grid, "发送时间", timeLabel(sendResult.sent_at), true);
+  bubble.append(grid, node("p", "mock-only-note", "此次结果由本地 Mock 传输生成，未访问外部网络。"));
+  body.append(meta, bubble);
+  row.append(body);
+  messageList.append(row);
+  messageList.scrollTo({ top: messageList.scrollHeight, behavior: "smooth" });
+}
+
+async function simulateSend(summary, container, target) {
+  target.disabled = true;
+  target.textContent = "模拟发送中…";
+  const triggerPayload = { chatid: summary.chatid, summary_id: summary.id };
+  try {
+    const trigger = await apiRequest(
+      endpoints.mockTrigger,
+      { method: "POST", body: JSON.stringify(triggerPayload), debugBody: triggerPayload },
+      "创建本地模拟触发消息",
+    );
+    const sendPayload = { trigger_msgid: trigger.trigger_msgid };
+    const sendResult = await apiRequest(
+      `${endpoints.summaries}/${summary.id}/send`,
+      { method: "POST", body: JSON.stringify(sendPayload), debugBody: sendPayload },
+      "模拟发送汇总日报",
+    );
+    const updated = {
+      ...summary,
+      publication_status: sendResult.publication_status,
+      sent_at: sendResult.sent_at,
+    };
+    renderConfirmationCard(updated, container, sendResult);
+    if (sendResult.attempt.send_status === "sent") {
+      renderMockSendChatMessage(updated, sendResult);
+      showToast(`汇总快照 ${summary.id} 模拟发送成功。`);
+    } else {
+      renderSystemMessage("本地模拟发送失败，请查看发送记录；重新确认后可以重试。", "error");
+      showToast("模拟发送失败，请查看发送记录并重新确认后重试。", true);
+    }
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    target.disabled = false;
+    target.textContent = "模拟发送";
+  }
+}
+
+function appendConfirmationForm(summary, container, card, attemptsContainer) {
+  const confirmerId = `confirmed-by-${summary.id}`;
+  const noteId = `confirmation-note-${summary.id}`;
+  const confirmerField = node("label", "field");
+  confirmerField.htmlFor = confirmerId;
+  confirmerField.append(node("span", "", "确认人 ID"));
+  const confirmer = node("input");
+  confirmer.id = confirmerId;
+  confirmer.name = "confirmed_by";
+  confirmer.maxLength = 255;
+  confirmer.value = senderUserid.value;
+  confirmerField.append(confirmer);
+
+  const noteField = node("label", "field");
+  noteField.htmlFor = noteId;
+  noteField.append(node("span", "", "确认备注（可选）"));
+  const note = node("textarea");
+  note.id = noteId;
+  note.name = "confirmation_note";
+  note.maxLength = 2000;
+  note.placeholder = summary.publication_status === "send_failed"
+    ? "请说明失败原因核对结果，确认后可重新模拟发送"
+    : "例如：已核对三条项目日报及人数、机械汇总";
+  noteField.append(note);
+  card.append(confirmerField, noteField);
+
+  const actions = node("div", "confirmation-actions");
+  actions.append(button(
+    summary.publication_status === "send_failed" ? "重新确认后重试" : "我已核对，确认汇总",
+    "primary-button",
+    async event => {
       const target = event.currentTarget;
       const confirmedBy = confirmer.value.trim();
       if (!confirmedBy) {
@@ -910,8 +1012,82 @@ function renderConfirmationCard(summary, container) {
       } finally {
         target.disabled = false;
       }
+    },
+  ));
+  if (summary.publication_status === "send_failed") {
+    actions.append(button("查看发送记录", "secondary-button", event => {
+      viewSendAttempts(summary, attemptsContainer, event.currentTarget);
     }));
-    card.append(actions);
+  }
+  card.append(actions, attemptsContainer);
+}
+
+function renderConfirmationCard(summary, container, sendResult = null) {
+  const existing = container.querySelector(".confirmation-card");
+  if (existing) existing.remove();
+
+  const card = node("section", "confirmation-card");
+  const top = node("div", "detection-top");
+  top.append(
+    node("h4", "", "人工确认与模拟发送"),
+    statusPill(summary.publication_status, publicationLabels),
+  );
+  card.append(top);
+  card.append(node(
+    "p",
+    "",
+    "确认后才能执行本地模拟发送。模拟过程复用现有发送状态机，但只使用 Mock 传输，不会发送真实群聊。",
+  ));
+
+  if (summary.confirmed_by) {
+    const meta = node("div", "confirmation-meta");
+    meta.append(
+      node("div", "", `确认人：${display(summary.confirmed_by)}`),
+      node("div", "", `确认时间：${timeLabel(summary.confirmed_at)}`),
+      node("div", "", `确认备注：${display(summary.confirmation_note, "无")}`),
+    );
+    card.append(meta);
+  }
+  if (sendResult) card.append(renderSendOutcome(summary, sendResult));
+
+  const attemptsContainer = node("section", "send-attempts");
+  if (["draft", "send_failed"].includes(summary.publication_status)) {
+    appendConfirmationForm(summary, container, card, attemptsContainer);
+  } else {
+    const actions = node("div", "confirmation-actions");
+    if (summary.publication_status === "confirmed") {
+      actions.append(button("模拟发送", "primary-button", event => {
+        simulateSend(summary, container, event.currentTarget);
+      }));
+    }
+    if (summary.publication_status === "sending") {
+      const sendingButton = button("模拟发送中…", "primary-button", () => {});
+      sendingButton.disabled = true;
+      actions.append(sendingButton);
+    }
+    actions.append(button("查看发送记录", "secondary-button", event => {
+      viewSendAttempts(summary, attemptsContainer, event.currentTarget);
+    }));
+    if (summary.publication_status === "confirmed") {
+      actions.append(button("取消人工确认", "secondary-button", async event => {
+        const target = event.currentTarget;
+        target.disabled = true;
+        try {
+          const updated = await apiRequest(
+            `${endpoints.summaries}/${summary.id}/unconfirm`,
+            { method: "POST", debugBody: {} },
+            "取消人工确认",
+          );
+          renderConfirmationCard(updated, container);
+          showToast(`汇总快照 ${summary.id} 已退回待确认状态。`);
+        } catch (error) {
+          showToast(error.message, true);
+        } finally {
+          target.disabled = false;
+        }
+      }));
+    }
+    card.append(actions, attemptsContainer);
   }
   container.append(card);
 }

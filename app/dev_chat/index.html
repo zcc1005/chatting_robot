@@ -8,6 +8,7 @@
 </head>
 <body
   data-mock-endpoint="/api/dev/mock-message"
+  data-mock-trigger-endpoint="/api/dev/mock-trigger-message"
   data-messages-endpoint="/api/messages"
   data-detections-endpoint="/api/report-detections"
   data-project-reports-endpoint="/api/project-reports"
@@ -106,8 +107,8 @@
         </div>
         <div class="confirmation-help">
           <strong>人工确认流程</strong>
-          <span>检查预览告警 → 保存汇总快照 → 填写确认人和备注 → 确认汇总</span>
-          <small>确认只更新本地快照状态，不会发送群消息。</small>
+          <span>检查预览告警 → 保存汇总快照 → 确认汇总 → 本地模拟发送</span>
+          <small>模拟发送只使用本地 Mock，不访问外部网络，也不会发送真实群聊。</small>
         </div>
         <div id="summary-result" class="summary-result" aria-live="polite">
           <div class="empty-state small">

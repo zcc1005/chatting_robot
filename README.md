@@ -348,13 +348,18 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
 1. 检查预览中的 `warnings`、重复项目和缺失字段；
 2. 点击“保存汇总快照”，保存成功后页面显示 `summary_id`；
-3. 在出现的“人工确认汇总快照”区域填写确认人 ID，可选填核对备注；
+3. 在出现的“人工确认与模拟发送”区域填写确认人 ID，可选填核对备注；
 4. 点击“我已核对，确认汇总”，页面调用 `POST /api/daily-reports/{summary_id}/confirm`；
-5. 确认成功后显示确认人、确认时间和备注。需要重新检查时可点击“取消人工确认”，调用 `/unconfirm` 将快照退回待确认状态。
+5. 确认成功后显示确认人、确认时间和备注，同时出现“模拟发送”和“查看发送记录”；
+6. 点击“模拟发送”后，页面先调用仅开发环境存在的 `POST /api/dev/mock-trigger-message`，再调用 `POST /api/daily-reports/{summary_id}/send`；
+7. 发送成功后，聊天区会收到一条“模拟发送成功”的机器人消息，并明确标注“仅本地 Mock，未发送真实群聊”；
+8. 点击“查看发送记录”可读取 `GET /api/daily-reports/{summary_id}/send-attempts`，查看时间、传输方式、状态和错误信息。响应地址只显示“已脱敏”。
+
+需要重新检查时可在发送前点击“取消人工确认”，调用 `/unconfirm` 将快照退回待确认状态。已经发送成功的快照不能重复发送；发送失败的快照需要重新人工确认后才会再次显示模拟发送按钮。
 
 即使 `generation_status=needs_review`，后端也允许在人工逐项核对后确认，确认责任由填写的确认人和备注记录。人工确认只改变已保存快照的本地 `publication_status`，不会修改原始消息、伪造缺失数据或发送真实群消息。
 
-底部“开发调试”面板默认折叠，可查看最近请求的接口、HTTP 状态码及脱敏后的请求/响应 JSON。页面不接受 `response_url`，不访问外部 URL，不保存浏览器密钥，Markdown 不执行原始 HTML。只有同时满足 `APP_ENV=development` 和 `ENABLE_MOCK_API=true` 时才注册页面及其静态资源；production 环境访问 `/dev/chat` 返回 404。
+底部“开发调试”面板默认折叠，可查看最近请求的接口、HTTP 状态码及脱敏后的请求/响应 JSON。页面不接受 `response_url`；模拟触发接口只接收 `chatid` 和 `summary_id`，Mock 地址由服务端随机生成且不会返回页面。默认 Mock 传输不访问外部 URL，页面不保存浏览器密钥，Markdown 不执行原始 HTML。只有同时满足 `APP_ENV=development` 和 `ENABLE_MOCK_API=true` 时才注册页面、静态资源和模拟触发接口；production 环境访问这些地址均返回 404。
 
 该页面只用于本地业务验收，是对现有 API 的可视化调用入口，不是真实交建通界面，也不具备真实消息发送能力。
 

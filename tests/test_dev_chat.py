@@ -102,6 +102,8 @@ def test_page_assets_do_not_contain_hardcoded_secrets(dev_chat_client) -> None:
     assert "LLM_API_KEY=" not in assets
     assert "JJT_ENCODING_AES_KEY=" not in assets
     assert "JJT_CALLBACK_TOKEN=" not in assets
+    assert "mock://response-url" not in assets
+    assert '(?:https?|mock):\\/\\/' in assets
 
 
 def test_user_text_is_rendered_with_text_content(dev_chat_client) -> None:
@@ -188,13 +190,45 @@ def test_saved_summary_can_be_confirmed_and_unconfirmed(dev_chat_client) -> None
     script = dev_chat_client.get("/dev/chat.js").text
 
     assert "人工确认流程" in html
-    assert "确认只更新本地快照状态" in html
-    assert "人工确认汇总快照" in script
+    assert "模拟发送只使用本地 Mock" in html
+    assert "人工确认与模拟发送" in script
     assert "confirmed_by" in script
     assert "confirmation_note" in script
     assert "}/confirm`" in script
     assert "}/unconfirm`" in script
     assert "我已核对，确认汇总" in script
+
+
+def test_confirmed_snapshot_can_mock_send_and_show_attempts(dev_chat_client) -> None:
+    html = dev_chat_client.get("/dev/chat").text
+    script = dev_chat_client.get("/dev/chat.js").text
+    styles = dev_chat_client.get("/dev/chat.css").text
+
+    assert 'data-mock-trigger-endpoint="/api/dev/mock-trigger-message"' in html
+    assert "endpoints.mockTrigger" in script
+    assert "function simulateSend" in script
+    assert "trigger.trigger_msgid" in script
+    assert "}/send`" in script
+    assert "模拟发送" in script
+    assert "function renderMockSendChatMessage" in script
+    assert "模拟发送成功" in script
+    assert "仅本地 Mock · 未发送真实群聊" in script
+    assert "publication_status" in script
+    assert "attempt.transport" in script
+    assert "attempt.send_status" in script
+    assert "sent_at" in script
+    assert "function viewSendAttempts" in script
+    assert "}/send-attempts`" in script
+    assert "attempted_at" in script
+    assert "completed_at" in script
+    assert "http_status_code" in script
+    assert "error_type" in script
+    assert "error_message" in script
+    assert '"响应地址", "已脱敏"' in script
+    assert "send_failed" in script
+    assert "重新确认后重试" in script
+    assert "模拟发送未执行" in script
+    assert ".send-attempt-card" in styles
 
 
 def test_mocked_user_html_is_not_embedded_in_page(

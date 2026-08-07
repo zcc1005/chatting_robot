@@ -28,6 +28,7 @@ body {
 
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .55; }
 
 .app-shell {
   display: grid;
@@ -278,6 +279,16 @@ textarea:focus, input:focus, select:focus { border-color: var(--green); box-shad
 .confirmation-meta { margin: 9px 0; padding: 8px; border-radius: 7px; color: #3f5f50; font-size: 10px; line-height: 1.6; background: var(--green-soft); }
 .confirmation-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .confirmation-actions .primary-button { padding: 8px 11px; font-size: 11px; }
+.send-outcome { margin: 9px 0; padding: 10px; border: 1px solid #bfe5d2; border-radius: 8px; background: #f1fbf6; }
+.send-outcome > strong { color: #087449; font-size: 11px; }
+.send-data-grid { margin-top: 8px; }
+.mock-only-note { margin: 8px 0 0; color: #7b6231; font-size: 9px; line-height: 1.5; }
+.mock-send-bubble { border-left: 4px solid var(--green); white-space: normal; }
+.mock-send-bubble > strong { color: #087449; }
+.send-attempts { width: 100%; }
+.send-attempt-card { margin-top: 9px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #f7f9fa; }
+.send-attempt-card strong { font-size: 10px; }
+.empty-attempts { margin-top: 9px; padding: 9px; border-radius: 7px; color: var(--muted); font-size: 10px; text-align: center; background: #f5f7f8; }
 
 .debug-panel { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .debug-panel summary { cursor: pointer; font-size: 12px; font-weight: 700; }

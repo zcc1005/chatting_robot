@@ -54,6 +54,30 @@ class MessageCreateResult(BaseModel):
     is_report_candidate: bool | None = None
     matched_rules: list[str] | None = None
     reason: str | None = None
+
+
+class MockTriggerMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chatid: str = Field(min_length=1, max_length=255)
+    summary_id: int = Field(gt=0)
+
+    @field_validator("chatid")
+    @classmethod
+    def chatid_cannot_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("chatid 不能为空")
+        return stripped
+
+
+class MockTriggerMessageResponse(BaseModel):
+    status: Literal["saved"]
+    trigger_msgid: str
+    chatid: str
+    summary_id: int
+
+
 class ReportDetectionResponse(BaseModel):
     msgid: str
     detection_status: DetectionStatus
