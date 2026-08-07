@@ -117,6 +117,58 @@ def test_standard_report_complete_extraction(client_and_llm) -> None:
     assert "施工日报" in mock_llm.calls[0]
 
 
+def test_compact_real_world_report_enters_daily_summary(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    mock_llm.responses = [
+        json.dumps(
+            full_extraction(
+                project_name="埃塞未来城项目",
+                report_date="2026-08-07",
+                weather="雨12-22°C",
+                management_count=None,
+                worker_count=25,
+                equipment=[
+                    {"name": "塔吊", "count": 2, "unit": "台"},
+                    {"name": "施工电梯", "count": 2, "unit": "台"},
+                ],
+                missing_fields=["management_count"],
+            ),
+            ensure_ascii=False,
+        )
+    ]
+    payload = report_message(
+        "compact-summary-report",
+        "埃塞未来城项目2026年8月7日施工情况天气情况:雨12-22°C"
+        "机械情况:塔吊2台,施工电梯2台。四、施工内容:"
+        "1.层楼梯变更2人；2.二层线管安装2人；今日产值完成1.04万元。",
+        chatid="construction-group-003",
+    )
+
+    detected = client.post("/api/dev/mock-message", json=payload).json()
+    assert detected["detection_status"] == "report_candidate"
+    assert "包含天气" in detected["matched_rules"]
+    assert "包含机械设备数量" in detected["matched_rules"]
+
+    extracted = client.post(
+        "/api/messages/compact-summary-report/extract-report"
+    ).json()
+    assert extracted["weather"] == "雨12-22°C"
+    assert extracted["extraction_status"] == "completed"
+
+    preview = client.post(
+        "/api/daily-reports/preview",
+        json={"chatid": "construction-group-003", "report_date": "2026-08-07"},
+    ).json()
+    assert preview["project_count"] == 1
+    assert preview["worker_total"] == 25
+    assert preview["projects"][0]["project_name"] == "埃塞未来城项目"
+    assert preview["projects"][0]["weather"] == "雨12-22°C"
+    assert preview["equipment"] == [
+        {"name": "塔吊", "count": 2, "unit": "台"},
+        {"name": "施工电梯", "count": 2, "unit": "台"},
+    ]
+
+
 def test_missing_weather_is_null_and_listed(client_and_llm) -> None:
     client, mock_llm = client_and_llm
     extraction = full_extraction(weather=None, missing_fields=["weather"])
@@ -272,13 +324,13 @@ def test_wrong_field_type_is_saved_as_failed(client_and_llm) -> None:
 
 def test_timeout_is_saved_as_failed(client_and_llm) -> None:
     client, mock_llm = client_and_llm
-    mock_llm.responses = [LLMClientTimeout("timeout")]
+    mock_llm.responses = [LLMClientTimeout("大模型调用超时（已自动重试 1 次）")]
     save_candidate(client, "timeout-report")
     response = client.post("/api/messages/timeout-report/extract-report")
     assert response.status_code == 504
     detail = client.get("/api/project-reports/timeout-report").json()
     assert detail["extraction_status"] == "failed"
-    assert detail["error_message"] == "大模型调用超时"
+    assert detail["error_message"] == "大模型调用超时（已自动重试 1 次）"
 
 
 def test_repeated_extraction_updates_one_record(client_and_llm) -> None:

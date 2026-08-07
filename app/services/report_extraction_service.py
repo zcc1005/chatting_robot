@@ -49,7 +49,11 @@ def extract_and_save_report(
     record = start_extraction(session, message)
     try:
         raw_response = client.extract(message.text_content)
-    except (LLMClientTimeout, TimeoutError):
+    except LLMClientTimeout as exc:
+        error_message = str(exc) or "大模型调用超时"
+        save_failure(session, record, error_message=error_message)
+        raise ReportExtractionTimeoutError(error_message) from None
+    except TimeoutError:
         save_failure(session, record, error_message="大模型调用超时")
         raise ReportExtractionTimeoutError("大模型调用超时") from None
     except Exception as exc:

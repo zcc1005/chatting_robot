@@ -63,13 +63,13 @@ def extract_message_report(
         )
     try:
         record = extract_and_save_report(session, message, client)
-    except ReportExtractionTimeoutError:
+    except ReportExtractionTimeoutError as exc:
         logger.warning(
             "report extraction timed out msgid=%s database_id=%s",
             message.msgid,
             message.id,
         )
-        raise HTTPException(status_code=504, detail="大模型调用超时") from None
+        raise HTTPException(status_code=504, detail=str(exc)) from None
     except ReportExtractionFailedError as exc:
         logger.warning(
             "report extraction failed msgid=%s database_id=%s error_type=%s",

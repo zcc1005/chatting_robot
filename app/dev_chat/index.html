@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>交建通施工日报机器人 · 本地验收</title>
+  <link rel="stylesheet" href="/dev/chat.css">
+</head>
+<body
+  data-mock-endpoint="/api/dev/mock-message"
+  data-messages-endpoint="/api/messages"
+  data-detections-endpoint="/api/report-detections"
+  data-project-reports-endpoint="/api/project-reports"
+  data-daily-reports-endpoint="/api/daily-reports"
+>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="测试群聊">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">交</div>
+        <div>
+          <strong>交建通日报</strong>
+          <span>本地验收环境</span>
+        </div>
+      </div>
+      <h2>测试群聊</h2>
+      <nav id="group-list" class="group-list">
+        <button class="group-item active" type="button" data-chatid="construction-group-001">
+          <span class="group-avatar">一标</span>
+          <span><strong>施工日报测试群 001</strong><small>construction-group-001</small></span>
+        </button>
+        <button class="group-item" type="button" data-chatid="construction-group-002">
+          <span class="group-avatar blue">二标</span>
+          <span><strong>施工日报测试群 002</strong><small>construction-group-002</small></span>
+        </button>
+        <button class="group-item" type="button" data-chatid="construction-group-003">
+          <span class="group-avatar amber">三标</span>
+          <span><strong>施工日报测试群 003</strong><small>construction-group-003</small></span>
+        </button>
+      </nav>
+      <div class="dev-notice">仅用于 development 本地验收，不连接真实群聊。</div>
+    </aside>
+
+    <main class="chat-panel">
+      <header class="chat-header">
+        <div>
+          <h1 id="chat-title">施工日报测试群 001</h1>
+          <p><span class="online-dot"></span> 本地 API 已连接</p>
+        </div>
+        <div class="chat-tools">
+          <span id="message-count" class="message-count">0 条消息</span>
+          <button id="scroll-oldest" class="header-button" type="button">查看最早</button>
+          <button id="scroll-latest" class="header-button" type="button">跳到最新</button>
+          <label class="compact-field" for="chatid-select">
+            <span>chatid</span>
+            <select id="chatid-select" name="chatid">
+              <option value="construction-group-001">construction-group-001</option>
+              <option value="construction-group-002">construction-group-002</option>
+              <option value="construction-group-003">construction-group-003</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <section id="message-list" class="message-list" tabindex="0" aria-live="polite" aria-label="聊天消息，可上下滚动查看完整上下文"></section>
+
+      <form id="composer" class="composer">
+        <div class="sender-row">
+          <label for="sender-userid">发送人 ID</label>
+          <select id="sender-userid" name="sender_userid">
+            <option value="builder-zhang">builder-zhang</option>
+            <option value="builder-li">builder-li</option>
+            <option value="manager-wang">manager-wang</option>
+          </select>
+          <label for="sender-name">发送人姓名</label>
+          <select id="sender-name" name="sender_name">
+            <option value="张工">张工</option>
+            <option value="李工">李工</option>
+            <option value="王经理">王经理</option>
+          </select>
+        </div>
+        <div class="input-row">
+          <textarea id="message-input" name="message" rows="3" maxlength="8000" placeholder="输入施工日报或普通聊天消息…" aria-label="消息输入框" required></textarea>
+          <button id="send-button" class="primary-button send-button" type="submit">发送</button>
+        </div>
+        <p class="input-hint">Enter 发送 · Shift+Enter 换行</p>
+      </form>
+    </main>
+
+    <aside class="workflow-panel" aria-label="生成日报">
+      <section class="workflow-card">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">日报工作台</span>
+            <h2>生成日报</h2>
+          </div>
+          <span class="date-icon" aria-hidden="true">日</span>
+        </div>
+        <label class="field" for="report-date">
+          <span>日报日期</span>
+          <input id="report-date" name="report_date" type="date" required>
+        </label>
+        <button id="preview-button" class="primary-button wide" type="button">生成汇总预览（自动提取）</button>
+        <div class="automation-help">
+          <strong>自动复核已开启</strong>
+          <span>日报候选或待复核消息会先调用大模型提取字段；生成预览前也会补提取当前群聊中尚未处理的日报。</span>
+        </div>
+        <div class="confirmation-help">
+          <strong>人工确认流程</strong>
+          <span>检查预览告警 → 保存汇总快照 → 填写确认人和备注 → 确认汇总</span>
+          <small>确认只更新本地快照状态，不会发送群消息。</small>
+        </div>
+        <div id="summary-result" class="summary-result" aria-live="polite">
+          <div class="empty-state small">
+            <span aria-hidden="true">汇</span>
+            <p>选择日期后生成多项目日报汇总预览</p>
+          </div>
+        </div>
+      </section>
+
+      <details id="debug-panel" class="debug-panel">
+        <summary>开发调试</summary>
+        <p class="debug-note">仅显示最近请求；敏感字段会自动隐藏。</p>
+        <div id="debug-records"></div>
+      </details>
+    </aside>
+  </div>
+
+  <dialog id="json-dialog" class="json-dialog">
+    <div class="dialog-header">
+      <h2 id="dialog-title">原始 JSON</h2>
+      <button id="dialog-close" type="button" aria-label="关闭">×</button>
+    </div>
+    <pre id="dialog-content"></pre>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/dev/chat.js" defer></script>
+</body>
+</html>

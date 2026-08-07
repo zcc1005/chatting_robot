@@ -11,6 +11,11 @@ from app.models.report_schemas import ExtractedWorkItem, ExtractionStatus
 
 
 GenerationStatus = Literal["completed", "needs_review"]
+PublicationStatus = Literal[
+    "draft", "confirmed", "sending", "sent", "send_failed"
+]
+SendStatus = Literal["sending", "sent", "send_failed"]
+SendTransport = Literal["mock", "real"]
 
 
 class DailyReportRequest(BaseModel):
@@ -122,6 +127,12 @@ class DailyReportPreviewResponse(BaseModel):
 
 class DailyReportSummaryResponse(DailyReportPreviewResponse):
     id: int
+    publication_status: PublicationStatus
+    confirmed_by: str | None
+    confirmed_at: datetime | None
+    confirmation_note: str | None
+    sent_at: datetime | None
+    send_attempts: list["DailyReportSendAttemptResponse"]
     created_at: datetime
     updated_at: datetime
 
@@ -136,6 +147,7 @@ class DailyReportSummaryListItem(BaseModel):
     management_total: int | None = Field(default=None, ge=0)
     worker_total: int | None = Field(default=None, ge=0)
     generation_status: GenerationStatus
+    publication_status: PublicationStatus
     warnings: list[str]
     created_at: datetime
     updated_at: datetime
@@ -145,3 +157,60 @@ class DailyReportSummaryListResponse(BaseModel):
     items: list[DailyReportSummaryListItem]
     limit: int
     offset: int
+
+
+class DailyReportConfirmationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmed_by: str = Field(min_length=1, max_length=255)
+    confirmation_note: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("confirmed_by")
+    @classmethod
+    def confirmed_by_cannot_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("confirmed_by 不能为空")
+        return stripped
+
+
+class DailyReportSendRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trigger_msgid: str = Field(min_length=1, max_length=255)
+
+    @field_validator("trigger_msgid")
+    @classmethod
+    def trigger_msgid_cannot_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("trigger_msgid 不能为空")
+        return stripped
+
+
+class DailyReportSendAttemptResponse(BaseModel):
+    id: int
+    summary_id: int
+    trigger_message_id: int
+    trigger_msgid: str
+    response_url_hash: str
+    send_status: SendStatus
+    transport: SendTransport
+    http_status_code: int | None
+    error_type: str | None
+    error_message: str | None
+    attempted_at: datetime
+    completed_at: datetime | None
+    created_at: datetime
+
+
+class DailyReportSendAttemptsResponse(BaseModel):
+    items: list[DailyReportSendAttemptResponse]
+
+
+class DailyReportSendResponse(BaseModel):
+    summary_id: int
+    attempt: DailyReportSendAttemptResponse
+    publication_status: PublicationStatus
+    sent_at: datetime | None
+    warnings: list[str]

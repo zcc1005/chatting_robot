@@ -39,6 +39,16 @@ def _read_float(name: str, default: float) -> float:
         raise ConfigurationError(f"{name} 必须是数字") from exc
 
 
+def _read_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} 必须是整数") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     # 显式构造 Settings 时默认保留历史回调行为；from_env 使用离线开发默认值。
@@ -55,7 +65,10 @@ class Settings:
     llm_api_key: str = ""
     llm_model: str = ""
     llm_base_url: str = ""
-    llm_timeout_seconds: float = 30.0
+    llm_timeout_seconds: float = 90.0
+    llm_max_retries: int = 1
+    enable_real_response_send: bool = False
+    response_send_timeout_seconds: float = 10.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -78,7 +91,14 @@ class Settings:
             llm_api_key=os.getenv("LLM_API_KEY", ""),
             llm_model=os.getenv("LLM_MODEL", ""),
             llm_base_url=os.getenv("LLM_BASE_URL", ""),
-            llm_timeout_seconds=_read_float("LLM_TIMEOUT_SECONDS", 30.0),
+            llm_timeout_seconds=_read_float("LLM_TIMEOUT_SECONDS", 90.0),
+            llm_max_retries=_read_int("LLM_MAX_RETRIES", 1),
+            enable_real_response_send=_read_bool(
+                "ENABLE_REAL_RESPONSE_SEND", False
+            ),
+            response_send_timeout_seconds=_read_float(
+                "RESPONSE_SEND_TIMEOUT_SECONDS", 10.0
+            ),
         )
         settings.validate()
         return settings
@@ -103,6 +123,12 @@ class Settings:
             raise ConfigurationError("JJT_MESSAGE_DATA_DIR 不能为空")
         if self.llm_timeout_seconds <= 0:
             raise ConfigurationError("LLM_TIMEOUT_SECONDS 必须大于 0")
+        if not 0 <= self.llm_max_retries <= 3:
+            raise ConfigurationError("LLM_MAX_RETRIES 必须在 0 到 3 之间")
+        if self.response_send_timeout_seconds <= 0:
+            raise ConfigurationError(
+                "RESPONSE_SEND_TIMEOUT_SECONDS 必须大于 0"
+            )
         resolved_log_level = getattr(logging, self.log_level.upper(), None)
         if not isinstance(resolved_log_level, int):
             raise ConfigurationError(f"无效的 JJT_LOG_LEVEL: {self.log_level}")

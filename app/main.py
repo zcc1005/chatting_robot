@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from app.api.callback import router as callback_router
 from app.api.daily_reports import router as daily_reports_router
+from app.api.dev_chat import router as dev_chat_router
 from app.api.messages import router as messages_router
 from app.api.mock import router as mock_router
 from app.api.project_reports import router as project_reports_router
@@ -22,11 +23,17 @@ from app.services.llm_extraction_client import (
     OpenAICompatibleExtractionClient,
     ReportExtractionClient,
 )
+from app.services.response_url_client import (
+    MockResponseUrlClient,
+    RealResponseUrlClient,
+    ResponseUrlClient,
+)
 
 
 def create_app(
     settings: Settings | None = None,
     report_extraction_client: ReportExtractionClient | None = None,
+    response_url_client: ResponseUrlClient | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_env()
     active_settings.validate()
@@ -47,9 +54,18 @@ def create_app(
                 model=active_settings.llm_model,
                 base_url=active_settings.llm_base_url,
                 timeout_seconds=active_settings.llm_timeout_seconds,
+                max_retries=active_settings.llm_max_retries,
             )
         else:
             app.state.report_extraction_client = None
+        if response_url_client is not None:
+            app.state.response_url_client = response_url_client
+        elif active_settings.enable_real_response_send:
+            app.state.response_url_client = RealResponseUrlClient(
+                timeout_seconds=active_settings.response_send_timeout_seconds
+            )
+        else:
+            app.state.response_url_client = MockResponseUrlClient()
 
         if active_settings.enable_jjt_callback:
             app.state.crypto = JJTCryptoService(
@@ -82,6 +98,7 @@ def create_app(
     application.include_router(daily_reports_router)
     if active_settings.mock_api_available:
         application.include_router(mock_router)
+        application.include_router(dev_chat_router)
     if active_settings.enable_jjt_callback:
         application.include_router(callback_router)
     return application

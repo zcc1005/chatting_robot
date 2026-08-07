@@ -16,7 +16,7 @@
 - 提供开发环境明文模拟接口、消息列表和详情查询接口；
 - 健康检查和本地自动化测试。
 
-当前未实现：大模型接入、施工日报抽取或生成、图片或文件下载、OCR、自动汇总、回调主动回复和前端页面。
+当前未实现：自动命令识别、定时发送、真实 `response_url` 协议联调、图片或文件下载、OCR 和真实交建通前端页面。
 
 ## 环境要求与安装
 
@@ -102,7 +102,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 - `GET /api/messages`：支持 `chatid`、`msgtype`、`process_status`、`start_time`、`end_time`、`limit`、`offset`；
 - `GET /api/messages/{msgid}`：返回消息、附件元数据和脱敏后的详情。
 
-SQLite 默认位于 `data/jjt_bot.db`。模拟接口和真实交建通 JSON 回调都调用同一个 `MessageService.process_plain_message`；真实回调额外执行验签、AES 解密和 JSONL 原始审计备份。当前阶段不会调用大模型、生成施工日报、下载附件或回复交建通群聊。
+SQLite 默认位于 `data/jjt_bot.db`。模拟接口和真实交建通 JSON 回调都调用同一个 `MessageService.process_plain_message`；真实回调额外执行验签、AES 解密和 JSONL 原始审计备份。消息接收接口本身不会调用大模型；开发验收页面会在规则初筛后显式调用结构化提取 API。当前阶段不会下载附件或回复交建通群聊。
 
 正式环境未来应配置：
 
@@ -191,7 +191,7 @@ https://你的公网HTTPS域名/api/jjt/callback
 
 ## 单条施工日报结构化字段提取
 
-结构化提取只通过 `POST /api/messages/{msgid}/extract-report` 手动触发。消息接收和规则识别阶段绝不会自动调用大模型，因此启动服务、接收回调、提交模拟消息和运行普通测试都不会产生大模型费用。
+结构化提取只通过 `POST /api/messages/{msgid}/extract-report` 触发，消息接收和规则识别服务本身不会隐式调用大模型。开发验收页面会在发送候选日报及生成预览前自动调用这个现有接口；直接使用后端 API 时仍由调用方决定何时提取。
 
 处理流程如下：
 
@@ -231,10 +231,11 @@ https://你的公网HTTPS域名/api/jjt/callback
 LLM_API_KEY=替换为服务端密钥
 LLM_MODEL=替换为模型名称
 LLM_BASE_URL=https://你的兼容服务地址/v1
-LLM_TIMEOUT_SECONDS=30
+LLM_TIMEOUT_SECONDS=90
+LLM_MAX_RETRIES=1
 ```
 
-前三项未完整配置时，服务仍能正常启动，健康检查、消息接收和本地识别不受影响；手动提取接口会返回 HTTP 503 和明确配置提示。日志不会输出 API Key、`response_url` 或完整日报正文。
+前三项未完整配置时，服务仍能正常启动，健康检查、消息接收和本地识别不受影响；提取接口会返回 HTTP 503 和明确配置提示。`LLM_TIMEOUT_SECONDS` 是等待模型返回的单次读超时，默认 90 秒；连接阶段最多等待 10 秒。`LLM_MAX_RETRIES` 默认 1，允许范围为 0–3，只对超时、网络瞬时错误、HTTP 429 和 5xx 自动重试，不会重试 400 等确定性请求错误。日志不会输出 API Key、`response_url` 或完整日报正文。
 
 在 Swagger <http://127.0.0.1:8000/docs> 中：
 
@@ -302,7 +303,143 @@ Content-Type: application/json
 - `GET /api/daily-reports/{summary_id}`：返回保存时的来源快照和 Markdown；
 - 相同 `chatid + report_date` 可以重复保存，每次都会生成新的快照，并通过 `daily_report_summary_items` 保存当次来源及顺序，不覆盖历史记录。
 
-Markdown 固定包含标题日期、总体人数、机械汇总、各项目施工情况、明日计划、安全质量以及待确认和缺失信息。当前仅生成供人工检查的预览和快照，不生成正式对外日报，不调用 `response_url`，也不会发送任何群消息。
+Markdown 固定包含标题日期、总体人数、机械汇总、各项目施工情况、明日计划、安全质量以及待确认和缺失信息。预览和快照保存阶段不会调用 `response_url`；只有下一节的显式人工确认和手动发送接口可以进入离线发送闭环。
+
+## 聊天式本地验收页面
+
+项目内置一个轻量的微信聊天框风格验收页面，不需要安装或启动独立的 React/Vue 项目。先在 `.env` 中确认：
+
+```dotenv
+APP_ENV=development
+ENABLE_MOCK_API=true
+```
+
+然后启动本地服务：
+
+```powershell
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+浏览器访问 <http://127.0.0.1:8000/dev/chat>。默认群聊为 `construction-group-001`，也可以从左侧切换其他预置测试群；页面刷新后会按当前 `chatid` 从消息、识别结果和结构化日报查询接口重新加载数据。
+
+可以依次选择发送人，将下面三条示例作为三条独立消息发送。页面会自动生成 `msgid`、`aibotid`、`chatid`、`chattype` 和消息 JSON，用户无需手写请求体：
+
+```text
+桥梁一标2026年8月6日施工日报，天气晴，管理人员3人，施工人员20人，挖掘机2台，今日完成1号桥桩基浇筑80%，明日继续桩基施工，安全正常，质量合格。
+```
+
+```text
+隧道二标2026年8月6日施工日报，天气多云，管理人员4人，施工人员30人，装载机1台，今日完成隧道掌子面开挖5米，明日继续开挖支护，安全正常，质量合格。
+```
+
+```text
+路基三标2026年8月6日施工日报，天气晴，管理人员2人，施工人员18人，压路机2台，今日完成K12路基填筑200米，明日进行下一层填筑，安全正常，质量合格。
+```
+
+发送后，消息卡片会先展示本地规则初筛状态、分数、命中规则和原因。对“日报候选”或“待大模型复核”的消息，页面会自动调用现有 `POST /api/messages/{msgid}/extract-report`，使用大模型提取 `project_name`、`report_date`、天气、人数、机械和施工内容，再决定是否确实需要人工处理；“提取结构化字段”按钮仍保留用于手动重试。点击“生成汇总预览”时，页面也会先检查当前群聊中尚未结构化的候选消息并补做大模型提取，避免“消息已接收但右侧项目数仍为 0”。
+
+自动提取需要提前配置 `LLM_API_KEY`、`LLM_MODEL` 和 `LLM_BASE_URL`。长日报超过单次等待时间时会按 `LLM_MAX_RETRIES` 自动重试；仍失败时原消息和失败审计都会保留，页面会显示中文错误和手动重试入口。下次点击“生成汇总预览（自动提取）”也会自动重试上次因超时或网络错误失败的日报，不会伪造提取结果。规则初筛的 `needs_review` 只表示特征不足、需要先交给大模型复核；只有大模型提取后仍缺少项目名称、日报日期或施工内容等关键字段时，才进入真正的人工处理流程。
+
+自动结构化提取成功后，页面会把右侧日期切换为大模型识别出的 `report_date` 并自动刷新汇总。也可在右侧手动选择 `2026-08-06` 并点击“生成汇总预览（自动提取）”。页面调用现有 `POST /api/daily-reports/preview`，以可读格式展示人数、机械、告警、重复项目、缺失字段和 Markdown。聊天消息区有独立纵向滚动条，顶部提供“查看最早”和“跳到最新”，也可使用鼠标滚轮、触控板或 `Ctrl+Home`/`Ctrl+End` 浏览完整的已加载上下文。
+
+人工确认按以下步骤进行：
+
+1. 检查预览中的 `warnings`、重复项目和缺失字段；
+2. 点击“保存汇总快照”，保存成功后页面显示 `summary_id`；
+3. 在出现的“人工确认汇总快照”区域填写确认人 ID，可选填核对备注；
+4. 点击“我已核对，确认汇总”，页面调用 `POST /api/daily-reports/{summary_id}/confirm`；
+5. 确认成功后显示确认人、确认时间和备注。需要重新检查时可点击“取消人工确认”，调用 `/unconfirm` 将快照退回待确认状态。
+
+即使 `generation_status=needs_review`，后端也允许在人工逐项核对后确认，确认责任由填写的确认人和备注记录。人工确认只改变已保存快照的本地 `publication_status`，不会修改原始消息、伪造缺失数据或发送真实群消息。
+
+底部“开发调试”面板默认折叠，可查看最近请求的接口、HTTP 状态码及脱敏后的请求/响应 JSON。页面不接受 `response_url`，不访问外部 URL，不保存浏览器密钥，Markdown 不执行原始 HTML。只有同时满足 `APP_ENV=development` 和 `ENABLE_MOCK_API=true` 时才注册页面及其静态资源；production 环境访问 `/dev/chat` 返回 404。
+
+该页面只用于本地业务验收，是对现有 API 的可视化调用入口，不是真实交建通界面，也不具备真实消息发送能力。
+
+## 汇总日报人工确认与 response_url 模拟发送
+
+保存后的汇总快照拥有两套互不混用的状态：
+
+- `generation_status` 描述汇总数据质量，取值为 `completed` 或 `needs_review`。它不会因为确认或发送而改变；`needs_review` 快照也允许人工核对后确认。
+- `publication_status` 描述人工确认和发送进度，取值为 `draft`、`confirmed`、`sending`、`sent`、`send_failed`。新快照和旧库迁移后的历史快照均默认为 `draft`。
+
+发布状态流转如下：
+
+```text
+draft ──人工确认──> confirmed ──发送抢占──> sending ──成功──> sent
+  ^                     |                         └─失败──> send_failed
+  └────取消确认─────────┘                                      |
+                         <────────再次人工确认──────────────────┘
+```
+
+人工确认使用：
+
+```http
+POST /api/daily-reports/{summary_id}/confirm
+Content-Type: application/json
+```
+
+```json
+{
+  "confirmed_by": "admin-user-001",
+  "confirmation_note": "已人工核对"
+}
+```
+
+`draft` 和 `send_failed` 可以确认，确认时保存确认人、确认时间和备注。`POST /api/daily-reports/{summary_id}/unconfirm` 可将 `confirmed` 退回 `draft`，同时清除本次确认信息；`sending` 或 `sent` 返回 HTTP 409，不允许退回。已发送快照也不能重复确认。
+
+默认配置为完全离线模拟发送：
+
+```dotenv
+ENABLE_REAL_RESPONSE_SEND=false
+RESPONSE_SEND_TIMEOUT_SECONDS=10
+```
+
+此时应用使用 `MockResponseUrlClient`，支持 `mock://` 地址，只改变本地状态并保存审计记录，不会进行 DNS 解析或 HTTP 请求。模拟触发消息可通过 Swagger 的 `POST /api/dev/mock-message` 提交：
+
+```json
+{
+  "msgid": "generate-report-command-001",
+  "aibotid": "bot-001",
+  "chatid": "construction-group-001",
+  "chattype": "group",
+  "from": {
+    "userid": "admin-user-001"
+  },
+  "response_url": "mock://response-url/generate-report-command-001",
+  "msgtype": "text",
+  "text": {
+    "content": "@机器人 生成2026年8月6日施工日报"
+  }
+}
+```
+
+确认汇总后，使用数据库中这条触发消息的 `msgid` 发送：
+
+```http
+POST /api/daily-reports/{summary_id}/send
+Content-Type: application/json
+```
+
+```json
+{
+  "trigger_msgid": "generate-report-command-001"
+}
+```
+
+接口不接受 URL 参数。服务只能读取已入库消息的 `response_url`，并校验消息与汇总的 `chatid` 一致；发送前通过数据库条件更新原子抢占 `sending`，避免已发送、正在发送或并发请求重复进入传输。当前直接使用快照的 `markdown_content`，不调用大模型润色或决定发送对象。超过一小时的触发消息会返回可能过期警告，但 Mock 模式仍可用于离线验证。
+
+每次实际进入发送流程都会写入 `daily_report_send_attempts`。可通过以下方式查看：
+
+- `GET /api/daily-reports/{summary_id}`：详情中的 `send_attempts`；
+- `GET /api/daily-reports/{summary_id}/send-attempts`：单独查询全部发送尝试；
+- `GET /api/daily-reports`：可额外按 `publication_status` 筛选快照。
+
+发送记录只保存 SHA-256 `response_url_hash`，不会保存完整 `response_url`；日志也不会输出完整 URL、API Key 或 Markdown 正文。失败只会把发布状态置为 `send_failed` 并记录受控错误，不会删除或改写汇总 Markdown、来源关联、结构化日报和原始消息。
+
+虽然提供了 `ENABLE_REAL_RESPONSE_SEND` 安全开关，但本地交建通材料没有给出可核验的 `response_url` 请求体协议。为遵守“不猜测协议字段”的要求，真实模式当前会在网络请求前以 `response_protocol_not_confirmed` 失败并留存审计记录；待交建通回调联调确认请求体、目标域名和返回码语义后才能启用真实 HTTP 传输。后续真实实现必须只允许 HTTPS、设置超时且禁止跨域重定向。
+
+`response_url` 通常具有一次性和时效性，只应用于紧邻当前回调的发送，不应把历史消息中的地址当作长期凭据反复使用。本阶段不会自动识别“生成日报”命令，也不会自动或定时发送。
 
 ## 企业微信自建应用验证
 
@@ -479,7 +616,7 @@ JSONL 审计文件仍使用进程内有限 LRU 去重，进程重启后这部分
 data/jjt_bot.db
 ```
 
-SQLite 包含 `messages` 和 `message_attachments` 两张表。`messages.msgid` 有数据库唯一约束，可在多请求并发时防止重复；附件与所属消息在同一事务内写入。当前只保存图片、文件的 URL、类型、下载状态和 MD5 等元数据，不会访问 URL 或下载文件。数据库文件、WAL 和 journal 文件均已加入 `.gitignore`。
+SQLite 以 `messages` 和 `message_attachments` 保存消息及附件，并以独立表保存规则识别、单条结构化日报、汇总快照、来源关联和发送尝试。`messages.msgid` 有数据库唯一约束，可在多请求并发时防止重复；附件与所属消息在同一事务内写入。当前只保存图片、文件的 URL、类型、下载状态和 MD5 等元数据，不会访问 URL 或下载文件。数据库文件、WAL 和 journal 文件均已加入 `.gitignore`。
 
 ## 测试
 
@@ -500,6 +637,7 @@ pytest -q
 - **Token 不一致**：确认 `.env` 的 `JJT_CALLBACK_TOKEN` 与交建通后台完全一致。
 - **EncodingAESKey 不是 43 位**：不要填写 AES 原始字节、引号或多余空格。
 - **误用了大模型 API Key**：这里必须填写交建通的 EncodingAESKey，不是任何模型密钥。
+- **长日报大模型调用超时**：保持 `LLM_TIMEOUT_SECONDS=90` 和 `LLM_MAX_RETRIES=1`，重启服务后在消息卡片点击“提取结构化字段”，或再次点击“生成汇总预览（自动提取）”。如果仍连续超时，再检查模型服务负载和网络，不建议无限增加重试次数。
 - **公网无法访问**：交建通必须能通过公网 HTTPS 访问回调地址，并由防火墙或网关放行。
 - **返回值被 JSON 序列化**：GET 验证成功必须返回裸明文，不能变成 `"明文"`。
 - **`msg_signature` 校验失败**：检查 Token、时间戳、nonce、密文是否原样传递，且网关没有改写查询参数。

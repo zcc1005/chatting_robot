@@ -78,6 +78,28 @@ def test_nonstandard_report_without_report_title_is_candidate(detection_client) 
     )
 
 
+def test_weather_situation_and_common_site_equipment_are_recognized(
+    detection_client,
+) -> None:
+    response = detection_client.post(
+        "/api/dev/mock-message",
+        json=text_message(
+            "compact-real-world-report",
+            "埃塞未来城项目2026年8月7日施工情况天气情况:雨12-22°C"
+            "机械情况:塔吊2台,施工电梯2台。四、施工内容:"
+            "1.层楼梯变更2人；2.二层线管安装2人；今日产值完成1.04万元。",
+        ),
+    )
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["detection_status"] == "report_candidate"
+    assert "包含日期" in body["matched_rules"]
+    assert "包含天气" in body["matched_rules"]
+    assert "包含机械设备数量" in body["matched_rules"]
+    assert "包含施工内容" in body["matched_rules"]
+
+
 @pytest.mark.parametrize(
     ("msgid", "content"),
     [

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -13,19 +13,34 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.database_models import DailyReportSummary
 from app.models.daily_report_schemas import (
+    DailyReportConfirmationRequest,
     DailyReportPreviewResponse,
     DailyReportRequest,
+    DailyReportSendAttemptResponse,
+    DailyReportSendAttemptsResponse,
+    DailyReportSendRequest,
+    DailyReportSendResponse,
     DailyReportSummaryListItem,
     DailyReportSummaryListResponse,
     DailyReportSummaryResponse,
     GenerationStatus,
+    PublicationStatus,
 )
 from app.repositories.daily_report_summary_repository import (
     deserialize_warnings,
     get_summary,
+    list_send_attempts,
     list_source_reports,
     list_summaries,
     save_summary_snapshot,
+)
+from app.services.daily_report_publication_service import (
+    PublicationConflictError,
+    SummaryNotFoundError,
+    TriggerMessageNotFoundError,
+    confirm_summary,
+    send_summary,
+    unconfirm_summary,
 )
 from app.services.daily_report_summary_service import (
     DailyReportSummaryError,
@@ -79,6 +94,7 @@ def query_daily_reports(
     chatid: str | None = Query(default=None),
     report_date: date | None = Query(default=None),
     generation_status: GenerationStatus | None = Query(default=None),
+    publication_status: PublicationStatus | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db),
@@ -88,6 +104,7 @@ def query_daily_reports(
         chatid=chatid,
         report_date=report_date,
         generation_status=generation_status,
+        publication_status=publication_status,
         limit=limit,
         offset=offset,
     )
@@ -107,6 +124,91 @@ def query_daily_report_detail(
     if record is None:
         raise HTTPException(status_code=404, detail="日报汇总不存在")
     return _to_detail(record)
+
+
+@router.post(
+    "/{summary_id}/confirm", response_model=DailyReportSummaryResponse
+)
+def confirm_daily_report(
+    summary_id: int,
+    request_data: DailyReportConfirmationRequest,
+    session: Session = Depends(get_db),
+) -> DailyReportSummaryResponse:
+    try:
+        record = confirm_summary(
+            session,
+            summary_id=summary_id,
+            confirmed_by=request_data.confirmed_by,
+            confirmation_note=request_data.confirmation_note,
+        )
+    except SummaryNotFoundError:
+        raise HTTPException(status_code=404, detail="日报汇总不存在") from None
+    except PublicationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return _to_detail(record)
+
+
+@router.post(
+    "/{summary_id}/unconfirm", response_model=DailyReportSummaryResponse
+)
+def unconfirm_daily_report(
+    summary_id: int,
+    session: Session = Depends(get_db),
+) -> DailyReportSummaryResponse:
+    try:
+        record = unconfirm_summary(session, summary_id=summary_id)
+    except SummaryNotFoundError:
+        raise HTTPException(status_code=404, detail="日报汇总不存在") from None
+    except PublicationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return _to_detail(record)
+
+
+@router.post("/{summary_id}/send", response_model=DailyReportSendResponse)
+def send_daily_report(
+    summary_id: int,
+    request_data: DailyReportSendRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+) -> DailyReportSendResponse:
+    try:
+        summary, attempt, warnings = send_summary(
+            session,
+            summary_id=summary_id,
+            trigger_msgid=request_data.trigger_msgid,
+            client=request.app.state.response_url_client,
+        )
+    except SummaryNotFoundError:
+        raise HTTPException(status_code=404, detail="日报汇总不存在") from None
+    except TriggerMessageNotFoundError:
+        raise HTTPException(status_code=404, detail="触发消息不存在") from None
+    except PublicationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return DailyReportSendResponse(
+        summary_id=summary.id,
+        attempt=_to_attempt(attempt),
+        publication_status=summary.publication_status,
+        sent_at=summary.sent_at,
+        warnings=warnings,
+    )
+
+
+@router.get(
+    "/{summary_id}/send-attempts",
+    response_model=DailyReportSendAttemptsResponse,
+)
+def query_daily_report_send_attempts(
+    summary_id: int,
+    session: Session = Depends(get_db),
+) -> DailyReportSendAttemptsResponse:
+    if session.get(DailyReportSummary, summary_id) is None:
+        raise HTTPException(status_code=404, detail="日报汇总不存在")
+    return DailyReportSendAttemptsResponse(
+        items=[
+            _to_attempt(attempt)
+            for attempt in list_send_attempts(session, summary_id)
+        ]
+    )
 
 
 def _build_preview(request_data: DailyReportRequest, reports) -> DailyReportPreviewResponse:
@@ -131,6 +233,12 @@ def _to_detail(record: DailyReportSummary) -> DailyReportSummaryResponse:
     return DailyReportSummaryResponse(
         **preview.model_dump(),
         id=record.id,
+        publication_status=record.publication_status,
+        confirmed_by=record.confirmed_by,
+        confirmed_at=record.confirmed_at,
+        confirmation_note=record.confirmation_note,
+        sent_at=record.sent_at,
+        send_attempts=[_to_attempt(item) for item in record.send_attempts],
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -148,9 +256,16 @@ def _to_list_item(record: DailyReportSummary) -> DailyReportSummaryListItem:
         management_total=record.management_total,
         worker_total=record.worker_total,
         generation_status=record.generation_status,
+        publication_status=record.publication_status,
         warnings=deserialize_warnings(record.warnings_json),
         created_at=record.created_at,
         updated_at=record.updated_at,
+    )
+
+
+def _to_attempt(record) -> DailyReportSendAttemptResponse:
+    return DailyReportSendAttemptResponse.model_validate(
+        record, from_attributes=True
     )
 
 

@@ -281,9 +281,15 @@ class DailyReportSummary(Base):
             "generation_status IN ('completed', 'needs_review')",
             name="ck_daily_summaries_generation_status",
         ),
+        CheckConstraint(
+            "publication_status IN "
+            "('draft', 'confirmed', 'sending', 'sent', 'send_failed')",
+            name="ck_daily_summaries_publication_status",
+        ),
         Index("ix_daily_summaries_chatid", "chatid"),
         Index("ix_daily_summaries_report_date", "report_date"),
         Index("ix_daily_summaries_generation_status", "generation_status"),
+        Index("ix_daily_summaries_publication_status", "publication_status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -293,6 +299,15 @@ class DailyReportSummary(Base):
     management_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     worker_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     generation_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    publication_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="draft", server_default="draft"
+    )
+    confirmed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        AwareDateTime(), nullable=True
+    )
+    confirmation_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(AwareDateTime(), nullable=True)
     markdown_content: Mapped[str] = mapped_column(Text, nullable=False)
     warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
@@ -308,6 +323,12 @@ class DailyReportSummary(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="DailyReportSummaryItem.display_order",
+    )
+    send_attempts: Mapped[list["DailyReportSendAttempt"]] = relationship(
+        back_populates="summary",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="DailyReportSendAttempt.id",
     )
 
 
@@ -339,4 +360,47 @@ class DailyReportSummaryItem(Base):
     summary: Mapped[DailyReportSummary] = relationship(back_populates="items")
     project_report: Mapped[ProjectReport] = relationship(
         back_populates="summary_items"
+    )
+
+
+class DailyReportSendAttempt(Base):
+    __tablename__ = "daily_report_send_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "send_status IN ('sending', 'sent', 'send_failed')",
+            name="ck_daily_send_attempts_status",
+        ),
+        CheckConstraint(
+            "transport IN ('mock', 'real')",
+            name="ck_daily_send_attempts_transport",
+        ),
+        Index("ix_daily_send_attempts_summary_id", "summary_id"),
+        Index("ix_daily_send_attempts_trigger_message_id", "trigger_message_id"),
+        Index("ix_daily_send_attempts_status", "send_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    summary_id: Mapped[int] = mapped_column(
+        ForeignKey("daily_report_summaries.id", ondelete="CASCADE"), nullable=False
+    )
+    trigger_message_id: Mapped[int] = mapped_column(
+        ForeignKey("messages.id"), nullable=False
+    )
+    trigger_msgid: Mapped[str] = mapped_column(String(255), nullable=False)
+    response_url_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    send_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    transport: Mapped[str] = mapped_column(String(32), nullable=False)
+    http_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempted_at: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        AwareDateTime(), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now
+    )
+
+    summary: Mapped[DailyReportSummary] = relationship(
+        back_populates="send_attempts"
     )

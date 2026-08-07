@@ -72,6 +72,7 @@ def init_db(runtime: DatabaseRuntime | None = None) -> None:
         raise RuntimeError("数据库尚未配置")
     _migrate_process_status_constraint(active_engine)
     Base.metadata.create_all(bind=active_engine)
+    _migrate_daily_report_publication_columns(active_engine)
 
 
 def get_db(request: Request) -> Generator[Session, None, None]:
@@ -144,3 +145,32 @@ def _migrate_process_status_constraint(active_engine: Engine) -> None:
         finally:
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
             connection.commit()
+
+
+def _migrate_daily_report_publication_columns(active_engine: Engine) -> None:
+    """为既有 SQLite 汇总表补充发布状态字段，不覆盖历史快照。"""
+    inspector = inspect(active_engine)
+    if "daily_report_summaries" not in inspector.get_table_names():
+        return
+
+    existing = {
+        column["name"]
+        for column in inspector.get_columns("daily_report_summaries")
+    }
+    additions = {
+        "publication_status": "VARCHAR(32) NOT NULL DEFAULT 'draft'",
+        "confirmed_by": "VARCHAR(255)",
+        "confirmed_at": "DATETIME",
+        "confirmation_note": "TEXT",
+        "sent_at": "DATETIME",
+    }
+    with active_engine.begin() as connection:
+        for name, sql_type in additions.items():
+            if name not in existing:
+                connection.exec_driver_sql(
+                    f'ALTER TABLE daily_report_summaries ADD COLUMN "{name}" {sql_type}'
+                )
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_daily_summaries_publication_status "
+            "ON daily_report_summaries (publication_status)"
+        )

@@ -16,7 +16,7 @@ from app.repositories.report_detection_repository import upsert_detection
 DetectionStatus = Literal[
     "report_candidate", "needs_review", "ignored", "not_applicable"
 ]
-DETECTOR_VERSION = "rules-v1"
+DETECTOR_VERSION = "rules-v2"
 
 _DATE_PATTERN = re.compile(
     r"(?:\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日)"
@@ -28,11 +28,16 @@ _PERSONNEL_PATTERN = re.compile(
     r"[零〇一二三四五六七八九十百千万\d]+\s*人"
 )
 _EQUIPMENT_PATTERN = re.compile(
-    r"(?:挖掘机|吊车|起重机|装载机|推土机|压路机|机械设备)\s*[:：]?\s*"
+    r"(?:挖掘机|吊车|汽车吊|起重机|塔吊|施工电梯|升降机|装载机|"
+    r"推土机|压路机|摊铺机|泵车|钻机|打桩机|搅拌机|发电机|机械设备)"
+    r"\s*[:：]?\s*"
     r"[零〇一二三四五六七八九十百千万\d]+\s*(?:台|辆)"
 )
 _WEATHER_PATTERN = re.compile(
-    r"(?:天气\s*[:：]?\s*(?:晴|多云|阴|小雨|中雨|大雨|阵雨|雪))"
+    r"(?:(?:天气|天气情况)\s*[:：]?\s*"
+    r"(?:晴|多云|阴|雨|小雨|中雨|大雨|阵雨|雷阵雨|雪)"
+    r"(?:\s*[-~～至到]?\s*-?\d{1,2}(?:\s*[-~～至到]\s*-?\d{1,2})?"
+    r"\s*(?:℃|°C|°c|C|c))?)"
     r"|(?:晴天|阴天|小雨|中雨|大雨|阵雨|多云)"
 )
 _CONSTRUCTION_CONTENT_TERMS = ("今日完成", "今日施工", "施工内容", "施工进度")
@@ -102,7 +107,7 @@ def evaluate_report_text(msgtype: str, text_content: str | None) -> DetectionEva
         reason = "命中多项施工日报特征"
     elif score >= 2:
         detection_status = "needs_review"
-        reason = "命中部分施工日报特征，信息不足，建议人工确认"
+        reason = "命中部分施工日报特征，建议先进行大模型结构化复核"
     else:
         detection_status = "ignored"
         reason = "未命中足够的施工日报特征"

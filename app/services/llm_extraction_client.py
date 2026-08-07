@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Protocol
 
 import httpx
@@ -40,11 +41,13 @@ class OpenAICompatibleExtractionClient:
         model: str,
         base_url: str,
         timeout_seconds: float,
+        max_retries: int = 1,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._endpoint = f"{base_url.rstrip('/')}/chat/completions"
         self._timeout_seconds = timeout_seconds
+        self._max_retries = max_retries
 
     def extract(self, text_content: str) -> str:
         request_json = {
@@ -56,21 +59,52 @@ class OpenAICompatibleExtractionClient:
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
-        try:
-            with httpx.Client(timeout=self._timeout_seconds) as client:
-                response = client.post(
-                    self._endpoint,
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=request_json,
-                )
-                response.raise_for_status()
-        except httpx.TimeoutException as exc:
-            raise LLMClientTimeout("大模型调用超时") from exc
-        except httpx.HTTPError as exc:
-            raise LLMClientError("大模型请求失败") from exc
+        timeout = httpx.Timeout(
+            self._timeout_seconds,
+            connect=min(self._timeout_seconds, 10.0),
+        )
+        with httpx.Client(timeout=timeout) as client:
+            for attempt in range(self._max_retries + 1):
+                try:
+                    response = client.post(
+                        self._endpoint,
+                        headers={
+                            "Authorization": f"Bearer {self._api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=request_json,
+                    )
+                    response.raise_for_status()
+                    break
+                except httpx.TimeoutException as exc:
+                    if attempt < self._max_retries:
+                        _wait_before_retry(attempt)
+                        continue
+                    retry_note = (
+                        f"（已自动重试 {self._max_retries} 次）"
+                        if self._max_retries
+                        else ""
+                    )
+                    raise LLMClientTimeout(
+                        f"大模型调用超时{retry_note}"
+                    ) from exc
+                except httpx.HTTPStatusError as exc:
+                    status_code = exc.response.status_code
+                    if (
+                        status_code == 429 or status_code >= 500
+                    ) and attempt < self._max_retries:
+                        _wait_before_retry(attempt)
+                        continue
+                    raise LLMClientError("大模型请求失败") from exc
+                except httpx.RequestError as exc:
+                    if attempt < self._max_retries:
+                        _wait_before_retry(attempt)
+                        continue
+                    raise LLMClientError(
+                        "大模型网络请求失败（已自动重试）"
+                    ) from exc
+            else:  # pragma: no cover - 循环只会 break 或抛出异常
+                raise LLMClientError("大模型请求失败")
 
         try:
             payload: Any = response.json()
@@ -82,3 +116,7 @@ class OpenAICompatibleExtractionClient:
         if len(content) > 1_000_000:
             raise LLMClientError("大模型响应内容过大")
         return content
+
+
+def _wait_before_retry(attempt: int) -> None:
+    time.sleep(min(0.5 * (2**attempt), 2.0))

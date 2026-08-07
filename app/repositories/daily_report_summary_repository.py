@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.models.database_models import (
     DailyReportSummary,
     DailyReportSummaryItem,
+    DailyReportSendAttempt,
     Message,
     ProjectReport,
 )
@@ -73,7 +74,8 @@ def get_summary(session: Session, summary_id: int) -> DailyReportSummary | None:
         .options(
             selectinload(DailyReportSummary.items)
             .joinedload(DailyReportSummaryItem.project_report)
-            .joinedload(ProjectReport.message)
+            .joinedload(ProjectReport.message),
+            selectinload(DailyReportSummary.send_attempts),
         )
         .where(DailyReportSummary.id == summary_id)
     )
@@ -86,6 +88,7 @@ def list_summaries(
     chatid: str | None = None,
     report_date: date | None = None,
     generation_status: str | None = None,
+    publication_status: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[DailyReportSummary]:
@@ -98,12 +101,27 @@ def list_summaries(
         statement = statement.where(
             DailyReportSummary.generation_status == generation_status
         )
+    if publication_status is not None:
+        statement = statement.where(
+            DailyReportSummary.publication_status == publication_status
+        )
     statement = (
         statement.order_by(
             DailyReportSummary.created_at.desc(), DailyReportSummary.id.desc()
         )
         .limit(limit)
         .offset(offset)
+    )
+    return list(session.scalars(statement).all())
+
+
+def list_send_attempts(
+    session: Session, summary_id: int
+) -> list[DailyReportSendAttempt]:
+    statement = (
+        select(DailyReportSendAttempt)
+        .where(DailyReportSendAttempt.summary_id == summary_id)
+        .order_by(DailyReportSendAttempt.id.asc())
     )
     return list(session.scalars(statement).all())
 
