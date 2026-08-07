@@ -23,6 +23,26 @@ class DailyReportSummaryError(ValueError):
     """结构化来源数据不满足确定性汇总约束。"""
 
 
+FIELD_LABELS = {
+    "project_name": "项目名称",
+    "report_date": "日报日期",
+    "weather": "天气情况",
+    "management_count": "管理人员数量",
+    "worker_count": "施工人员数量",
+    "equipment": "机械设备",
+    "work_items": "施工内容",
+    "tomorrow_plan": "明日计划",
+    "safety_status": "安全情况",
+    "quality_status": "质量情况",
+}
+EXTRACTION_STATUS_LABELS = {
+    "pending": "等待提取",
+    "completed": "提取完成",
+    "needs_review": "需要人工确认",
+    "failed": "提取失败",
+}
+
+
 def build_daily_report_preview(
     reports: list[ProjectReport],
     *,
@@ -43,10 +63,13 @@ def build_daily_report_preview(
 
     for report in reports:
         if report.extraction_status != "completed":
-            reason = f"状态为 {report.extraction_status}"
+            reason = (
+                "提取状态为"
+                f"“{EXTRACTION_STATUS_LABELS.get(report.extraction_status, '未知')}”"
+            )
             review_reasons[report.id].append(reason)
             warnings.append(
-                f"日报 {report.msgid} {reason}，未进入数值汇总"
+                f"{_report_name(report)}{reason}，未进入数值汇总"
             )
 
     duplicate_projects: list[DuplicateProject] = []
@@ -62,9 +85,8 @@ def build_daily_report_preview(
                 reports=sources,
             )
         )
-        related_msgids = "、".join(report.msgid for report in group)
         warnings.append(
-            f"项目 {project_name} 存在重复日报（{related_msgids}），相关数据未进入汇总"
+            f"{project_name}存在 {len(group)} 条重复日报，相关数据未进入汇总"
         )
         for report in group:
             review_reasons[report.id].append("同项目同日期存在重复日报")
@@ -74,9 +96,9 @@ def build_daily_report_preview(
         if report.extraction_status != "completed" or report.id in duplicate_ids:
             continue
         if report.project_name is None or not report.work_items:
-            review_reasons[report.id].append("completed 日报缺少关键字段")
+            review_reasons[report.id].append("已提取日报仍缺少关键字段")
             warnings.append(
-                f"日报 {report.msgid} 缺少项目名称或施工内容，未进入数值汇总"
+                f"{_report_name(report)}缺少项目名称或施工内容，未进入数值汇总"
             )
             continue
         included_reports.append(report)
@@ -95,7 +117,7 @@ def build_daily_report_preview(
                 )
             )
             warnings.append(
-                f"日报 {report.msgid} 缺失字段：{', '.join(fields)}"
+                f"{_report_name(report)}缺少：{_format_field_labels(fields)}"
             )
 
     management_values = [
@@ -165,7 +187,7 @@ def build_daily_report_preview(
     ]
 
     if not included_reports:
-        warnings.append("没有可进入数值汇总的 completed 日报")
+        warnings.append("没有可进入数值汇总的已完成日报")
 
     management_total = sum(management_values) if management_values else None
     worker_total = sum(worker_values) if worker_values else None
@@ -308,18 +330,16 @@ def render_markdown(
     if duplicate_projects:
         lines.extend(["", "### 重复项目", ""])
         for duplicate in duplicate_projects:
-            msgids = "、".join(item.msgid for item in duplicate.reports)
-            lines.append(f"- {_one_line(duplicate.project_name)}：{_one_line(msgids)}")
+            lines.append(
+                f"- {_one_line(duplicate.project_name)}：发现 "
+                f"{len(duplicate.reports)} 条重复日报，请人工选择有效记录"
+            )
     if review_reports:
         lines.extend(["", "### 待人工确认日报", ""])
         lines.extend(
-            f"- {item.msgid}：{_one_line(item.review_reason)}"
+            f"- {_summary_item_name(item.project_name, item.msgid)}："
+            f"{_one_line(item.review_reason)}"
             for item in review_reports
-        )
-    if missing_data:
-        lines.extend(["", "### 缺失字段", ""])
-        lines.extend(
-            f"- {item.msgid}：{', '.join(item.fields)}" for item in missing_data
         )
     return "\n".join(lines).rstrip() + "\n"
 
@@ -381,6 +401,20 @@ def _format_people(value: int | None, has_missing: bool) -> str:
         return "未完整统计"
     suffix = "（存在缺失，仅汇总已知数据）" if has_missing else ""
     return f"{value} 人{suffix}"
+
+
+def _format_field_labels(fields: list[str]) -> str:
+    return "、".join(FIELD_LABELS.get(field, "其他信息") for field in fields)
+
+
+def _report_name(report: ProjectReport) -> str:
+    return f"{_summary_item_name(report.project_name, report.msgid)}："
+
+
+def _summary_item_name(project_name: str | None, _msgid: str) -> str:
+    if project_name:
+        return f"项目“{project_name}”"
+    return "项目名称未识别的日报"
 
 
 def _optional_text(value: str | None) -> str:

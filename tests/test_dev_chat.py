@@ -135,12 +135,29 @@ def test_summary_preview_fields_and_markdown_can_be_displayed(
     assert "查看汇总详情" in script
 
 
+def test_user_facing_missing_fields_use_chinese_labels(dev_chat_client) -> None:
+    script = dev_chat_client.get("/dev/chat.js").text
+
+    assert 'management_count: "管理人员数量"' in script
+    assert 'tomorrow_plan: "明日计划"' in script
+    assert 'safety_status: "安全情况"' in script
+    assert 'quality_status: "质量情况"' in script
+    assert '"还需补充的信息"' in script
+    assert "fieldListText(report.missing_fields)" in script
+    assert "function summaryProjectNames" in script
+    assert "function humanizeSummaryText" in script
+    assert "humanizeSummaryText(rawLine.trim(), summaryData)" in script
+    assert '项目“${projectName}”' in script
+    assert '"项目名称未识别的日报"' in script
+    assert "map(report => report.msgid)" not in script
+
+
 def test_candidate_is_llm_extracted_before_preview(dev_chat_client) -> None:
     html = dev_chat_client.get("/dev/chat").text
     script = dev_chat_client.get("/dev/chat.js").text
 
     assert "自动复核已开启" in html
-    assert "生成汇总预览（自动提取）" in html
+    assert "生成汇总预览" in html
     assert "function autoExtractNewMessage" in script
     assert "function extractPendingReportsBeforePreview" in script
     assert "await autoExtractNewMessage(result)" in script
@@ -150,6 +167,20 @@ def test_candidate_is_llm_extracted_before_preview(dev_chat_client) -> None:
     assert "if (!extractionReady) return" in script
     assert 'extraction_status === "failed"' in script
     assert "网络请求失败" in script
+
+
+def test_preview_is_sent_as_local_robot_chat_message(dev_chat_client) -> None:
+    html = dev_chat_client.get("/dev/chat").text
+    script = dev_chat_client.get("/dev/chat.js").text
+    styles = dev_chat_client.get("/dev/chat.css").text
+
+    assert "机器人会在聊天区直接发送一条汇总日报卡片" in html
+    assert "function renderSummaryChatMessage" in script
+    assert "renderSummaryChatMessage(preview)" in script
+    assert "本地预览 · 未发送真实群聊" in script
+    assert "施工日报汇总预览" in script
+    assert "messageList.scrollHeight" in script
+    assert ".summary-chat-bubble" in styles
 
 
 def test_saved_summary_can_be_confirmed_and_unconfirmed(dev_chat_client) -> None:

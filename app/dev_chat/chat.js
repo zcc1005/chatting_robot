@@ -49,7 +49,7 @@ const detectionLabels = {
 const extractionLabels = {
   pending: "等待提取",
   completed: "提取完成",
-  needs_review: "缺失字段，需确认",
+  needs_review: "信息不完整，需确认",
   failed: "结构化提取失败",
 };
 const generationLabels = {
@@ -62,6 +62,20 @@ const publicationLabels = {
   sending: "处理中",
   sent: "已发送",
   send_failed: "处理失败",
+};
+const fieldLabels = {
+  project_name: "项目名称",
+  report_date: "日报日期",
+  weather: "天气情况",
+  management_count: "管理人员数量",
+  worker_count: "施工人员数量",
+  equipment: "机械设备",
+  work_items: "施工内容",
+  tomorrow_plan: "明日计划",
+  safety_status: "安全情况",
+  quality_status: "质量情况",
+  missing_fields: "缺失信息",
+  extraction_status: "提取状态",
 };
 const sensitiveKeyPattern = /(?:api[-_]?key|token|encodingaeskey|response[-_]?url|secret)/i;
 const debugHistory = [];
@@ -94,6 +108,38 @@ function button(text, className, action) {
 function display(value, empty = "未提供") {
   if (value === null || value === undefined || value === "") return empty;
   return String(value);
+}
+
+function fieldListText(fields) {
+  if (!Array.isArray(fields) || !fields.length) return "无";
+  return fields.map(field => fieldLabels[field] || "其他信息").join("、");
+}
+
+function humanizeFieldText(value) {
+  let result = String(value ?? "");
+  for (const [field, label] of Object.entries(fieldLabels)) {
+    result = result.replaceAll(field, label);
+  }
+  return result;
+}
+
+function summaryProjectNames(data) {
+  const names = new Map();
+  for (const collectionName of ["source_reports", "missing_data", "review_reports", "projects"]) {
+    const collection = Array.isArray(data?.[collectionName]) ? data[collectionName] : [];
+    for (const item of collection) {
+      if (item?.msgid && item?.project_name) names.set(item.msgid, item.project_name);
+    }
+  }
+  return [...names.entries()].sort((left, right) => right[0].length - left[0].length);
+}
+
+function humanizeSummaryText(value, data) {
+  let result = humanizeFieldText(value);
+  for (const [msgid, projectName] of summaryProjectNames(data)) {
+    result = result.replaceAll(msgid, `项目“${projectName}”`);
+  }
+  return result.replace(/dev-chat-[a-zA-Z0-9-]+/g, "项目名称未识别的日报");
 }
 
 function localToday() {
@@ -304,18 +350,18 @@ function renderExtraction(report) {
   heading.append(node("h3", "", "结构化日报字段"), statusPill(report.extraction_status, extractionLabels));
   card.append(heading);
   const grid = node("dl", "data-grid");
-  addDataItem(grid, "project_name", report.project_name);
-  addDataItem(grid, "report_date", report.report_date);
-  addDataItem(grid, "weather", report.weather);
-  addDataItem(grid, "management_count", report.management_count);
-  addDataItem(grid, "worker_count", report.worker_count);
-  addDataItem(grid, "extraction_status", extractionLabels[report.extraction_status] || report.extraction_status);
-  addDataItem(grid, "equipment", equipmentText(report.equipment), true);
-  addDataItem(grid, "work_items", workItemsText(report.work_items), true);
+  addDataItem(grid, "项目名称", report.project_name);
+  addDataItem(grid, "日报日期", report.report_date);
+  addDataItem(grid, "天气情况", report.weather);
+  addDataItem(grid, "管理人员数量", report.management_count);
+  addDataItem(grid, "施工人员数量", report.worker_count);
+  addDataItem(grid, "提取状态", extractionLabels[report.extraction_status] || "未知");
+  addDataItem(grid, "机械设备", equipmentText(report.equipment), true);
+  addDataItem(grid, "施工内容", workItemsText(report.work_items), true);
   addDataItem(
     grid,
-    "missing_fields",
-    Array.isArray(report.missing_fields) && report.missing_fields.length ? report.missing_fields.join("、") : "无",
+    "缺失信息",
+    fieldListText(report.missing_fields),
     true,
   );
   if (report.error_message) addDataItem(grid, "错误说明", report.error_message, true);
@@ -438,7 +484,7 @@ async function autoExtractNewMessage(messageResult) {
     await loadChat();
     renderSystemMessage(
       report.extraction_status === "needs_review"
-        ? `大模型已完成复核，但仍缺少：${(report.missing_fields || []).join("、") || "关键字段"}，需要人工处理。`
+        ? `大模型已完成复核，但仍缺少：${fieldListText(report.missing_fields)}，需要人工处理。`
         : "大模型已完成结构化复核，右侧汇总已自动刷新。",
     );
     await previewSummary({ skipAutoExtraction: true });
@@ -566,11 +612,11 @@ function addSummaryList(parent, title, items, formatter) {
   parent.append(section);
 }
 
-function renderMarkdown(markdown) {
+function renderMarkdown(markdown, summaryData) {
   const container = node("article", "markdown-card");
   let list = null;
   for (const rawLine of String(markdown || "").split(/\r?\n/)) {
-    const line = rawLine.trim();
+    const line = humanizeSummaryText(rawLine.trim(), summaryData);
     if (!line) {
       list = null;
       continue;
@@ -622,34 +668,118 @@ function renderSummary(data) {
   if (Array.isArray(data.warnings) && data.warnings.length) {
     const warning = node("div", "alert-box");
     warning.append(node("strong", "", generationLabels.needs_review));
-    for (const text of data.warnings) warning.append(node("div", "", text));
+    for (const text of data.warnings) {
+      warning.append(node("div", "", humanizeSummaryText(text, data)));
+    }
     summaryResult.append(warning);
   }
   if (Array.isArray(data.duplicate_projects) && data.duplicate_projects.length) {
     const duplicates = node("div", "alert-box danger");
     duplicates.append(node("strong", "", "重复项目"));
     for (const item of data.duplicate_projects) {
-      const msgids = (item.reports || []).map(report => report.msgid).join("、");
-      duplicates.append(node("div", "", `${item.project_name}：${msgids}`));
+      const reportCount = Array.isArray(item.reports) ? item.reports.length : 0;
+      duplicates.append(
+        node(
+          "div",
+          "",
+          `${item.project_name || "未命名项目"}：发现 ${reportCount} 条重复日报，请人工选择有效记录`,
+        ),
+      );
     }
     summaryResult.append(duplicates);
   }
   if (Array.isArray(data.missing_data) && data.missing_data.length) {
     addSummaryList(
       summaryResult,
-      "缺失字段",
+      "还需补充的信息",
       data.missing_data,
-      item => `${item.project_name || item.msgid}：${(item.fields || []).join("、")}`,
+      item => `${item.project_name ? `项目“${item.project_name}”` : "项目名称未识别"}：${fieldListText(item.fields)}`,
     );
   }
 
-  summaryResult.append(renderMarkdown(data.markdown_content));
+  summaryResult.append(renderMarkdown(data.markdown_content, data));
   const actions = node("div", "summary-actions");
   actions.append(
     button("查看原始 JSON", "secondary-button", () => showJson("汇总预览原始 JSON", data)),
     button("保存汇总快照", "primary-button wide", saveSummary),
   );
   summaryResult.append(actions);
+}
+
+function renderSummaryChatMessage(data) {
+  const previewKey = `${data.chatid}:${data.report_date}`;
+  const previous = [...messageList.querySelectorAll(".summary-chat-message")]
+    .find(item => item.dataset.previewKey === previewKey);
+  if (previous) previous.remove();
+
+  const row = node("article", "message-row system summary-chat-message");
+  row.dataset.previewKey = previewKey;
+  row.append(node("div", "avatar summary-avatar", "日报"));
+
+  const body = node("div", "message-body");
+  const meta = node("div", "message-meta");
+  meta.append(
+    node("span", "", "日报机器人"),
+    node("span", "", "刚刚"),
+    node("span", "preview-only-badge", "本地预览 · 未发送真实群聊"),
+  );
+
+  const bubble = node("div", "bubble summary-chat-bubble");
+  const heading = node("div", "summary-chat-heading");
+  const headingText = node("div");
+  headingText.append(
+    node("span", "eyebrow", "汇总日报"),
+    node("h2", "", `${data.report_date} 施工日报汇总预览`),
+  );
+  heading.append(headingText, statusPill(data.generation_status, generationLabels));
+  bubble.append(heading);
+
+  const metrics = node("div", "summary-metrics summary-chat-metrics");
+  for (const [value, label] of [
+    [data.project_count, "项目数"],
+    [display(data.management_total, "—"), "管理人员"],
+    [display(data.worker_total, "—"), "施工人员"],
+  ]) {
+    const metric = node("div", "metric");
+    metric.append(node("strong", "", value), node("span", "", label));
+    metrics.append(metric);
+  }
+  bubble.append(metrics);
+
+  if (Array.isArray(data.equipment) && data.equipment.length) {
+    addSummaryList(
+      bubble,
+      "机械设备汇总",
+      data.equipment,
+      item => `${item.name}：${item.count} ${item.unit}`,
+    );
+  }
+  if (Array.isArray(data.warnings) && data.warnings.length) {
+    const warning = node("div", "alert-box");
+    warning.append(node("strong", "", "需要关注"));
+    const missingCount = Array.isArray(data.missing_data) ? data.missing_data.length : 0;
+    const duplicateCount = Array.isArray(data.duplicate_projects) ? data.duplicate_projects.length : 0;
+    if (missingCount) warning.append(node("div", "", `${missingCount} 个项目存在缺失信息`));
+    if (duplicateCount) warning.append(node("div", "", `${duplicateCount} 个项目存在重复日报`));
+    if (!missingCount && !duplicateCount) {
+      warning.append(node("div", "", `${data.warnings.length} 项内容需要确认，详见下方日报`));
+    }
+    bubble.append(warning);
+  }
+
+  bubble.append(renderMarkdown(data.markdown_content, data));
+  const actions = node("div", "summary-actions");
+  actions.append(
+    button("查看原始 JSON", "secondary-button", () => showJson("汇总预览原始 JSON", data)),
+    button("查看右侧工作台", "secondary-button", () => {
+      document.querySelector(".workflow-panel").scrollTo({ top: 0, behavior: "smooth" });
+    }),
+  );
+  bubble.append(actions);
+  body.append(meta, bubble);
+  row.append(body);
+  messageList.append(row);
+  messageList.scrollTo({ top: messageList.scrollHeight, behavior: "smooth" });
 }
 
 async function previewSummary(options = {}) {
@@ -670,6 +800,7 @@ async function previewSummary(options = {}) {
       "生成汇总预览",
     );
     renderSummary(preview);
+    renderSummaryChatMessage(preview);
     if (preview.generation_status === "needs_review") {
       showToast("汇总已生成，但存在需要人工确认的内容。", true);
     } else {
@@ -831,7 +962,10 @@ function selectChat(chatid) {
   currentPreview = null;
   summaryResult.replaceChildren();
   const empty = node("div", "empty-state small");
-  empty.append(node("span", "", "汇"), node("p", "", "选择日期后生成多项目日报汇总预览"));
+  empty.append(
+    node("span", "", "汇"),
+    node("p", "", "选择日期后生成预览，机器人会把汇总日报发送到聊天区"),
+  );
   summaryResult.append(empty);
   loadChat();
 }

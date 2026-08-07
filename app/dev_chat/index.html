@@ -99,10 +99,10 @@
           <span>日报日期</span>
           <input id="report-date" name="report_date" type="date" required>
         </label>
-        <button id="preview-button" class="primary-button wide" type="button">生成汇总预览（自动提取）</button>
+        <button id="preview-button" class="primary-button wide" type="button">生成汇总预览</button>
         <div class="automation-help">
           <strong>自动复核已开启</strong>
-          <span>日报候选或待复核消息会先调用大模型提取字段；生成预览前也会补提取当前群聊中尚未处理的日报。</span>
+          <span>日报候选会先由大模型提取字段；预览成功后，机器人会在聊天区直接发送一条汇总日报卡片。</span>
         </div>
         <div class="confirmation-help">
           <strong>人工确认流程</strong>
@@ -112,7 +112,7 @@
         <div id="summary-result" class="summary-result" aria-live="polite">
           <div class="empty-state small">
             <span aria-hidden="true">汇</span>
-            <p>选择日期后生成多项目日报汇总预览</p>
+            <p>选择日期后生成预览，机器人会把汇总日报发送到聊天区</p>
           </div>
         </div>
       </section>

@@ -318,6 +318,11 @@ def test_missing_people_count_is_not_treated_as_zero(summary_client) -> None:
     assert body["management_total"] is None
     assert body["worker_total"] == 20
     assert "management_count" in body["missing_data"][0]["fields"]
+    assert body["missing_data"][0]["project_name"] == "桥梁一标"
+    assert "管理人员数量" in body["markdown_content"]
+    assert "management_count" not in body["markdown_content"]
+    assert "项目“桥梁一标”" in body["markdown_content"]
+    assert "missing-management" not in body["markdown_content"]
     assert "未完整统计" in body["markdown_content"]
 
 
@@ -351,6 +356,9 @@ def test_duplicate_project_is_marked_and_not_summed(summary_client) -> None:
         "duplicate-one",
         "duplicate-two",
     }
+    assert "发现 2 条重复日报，请人工选择有效记录" in body["markdown_content"]
+    assert "duplicate-one" not in body["markdown_content"]
+    assert "duplicate-two" not in body["markdown_content"]
 
 
 def test_no_valid_report_returns_review_preview(summary_client) -> None:

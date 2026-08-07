@@ -172,6 +172,16 @@ button { cursor: pointer; }
 .bubble { padding: 11px 14px; border-radius: 5px 14px 14px 14px; line-height: 1.65; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; background: white; box-shadow: 0 2px 8px rgba(36, 55, 68, .06); }
 .message-row.user .bubble { border-radius: 14px 5px 14px 14px; background: #c9f2dc; }
 .system .avatar { background: linear-gradient(145deg, #22b879, #0b8952); }
+.summary-chat-message .message-body { max-width: min(92%, 860px); }
+.summary-avatar { background: linear-gradient(145deg, #169f66, #087448) !important; }
+.preview-only-badge { padding: 2px 6px; border-radius: 999px; color: #7c5c1d; background: #fff1c9; }
+.summary-chat-bubble { padding: 16px; border: 1px solid #d7e8df; border-left: 4px solid var(--green); white-space: normal; background: #fff; }
+.summary-chat-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.summary-chat-heading h2 { margin: 3px 0 0; font-size: 16px; }
+.summary-chat-metrics { margin-bottom: 12px; }
+.summary-chat-bubble .summary-section { padding: 9px 11px; border-radius: 8px; background: #f6f9f8; }
+.summary-chat-bubble .markdown-card { margin-top: 12px; background: #fff; }
+.summary-chat-bubble .summary-actions { padding-top: 4px; }
 
 .detection-card, .extraction-card {
   margin-top: 8px;
