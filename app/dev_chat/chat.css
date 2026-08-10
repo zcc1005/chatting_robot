@@ -223,6 +223,12 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .sender-row label { color: var(--muted); font-size: 10px; }
 .sender-row select { padding: 5px 24px 5px 7px; border: 1px solid var(--line); border-radius: 6px; color: #44515c; font-size: 11px; background: white; }
 .input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: stretch; }
+.composer-actions { display: grid; grid-template-rows: 1fr 1fr; gap: 7px; min-width: 82px; }
+.image-button { padding: 0 12px; }
+.message-image { display: block; max-width: min(420px, 100%); max-height: 320px; margin-top: 8px; border-radius: 9px; object-fit: contain; background: #eef2f0; }
+.recognition-card { margin-top: 8px; padding: 10px; border: 1px solid #d7e6dd; border-radius: 9px; background: #f7fbf8; font-size: 11px; }
+.recognition-card p { margin: 5px 0 0; line-height: 1.55; }
+.markdown-card img { display: block; max-width: min(520px, 100%); max-height: 360px; margin: 8px 0; border-radius: 9px; object-fit: contain; }
 textarea { width: 100%; resize: none; padding: 10px 12px; border: 1px solid #d6dde2; border-radius: 9px; outline: none; line-height: 1.55; }
 textarea:focus, input:focus, select:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(22, 162, 103, .11); outline: none; }
 .input-hint { margin: 6px 2px 0; color: #9aa3aa; font-size: 9px; }

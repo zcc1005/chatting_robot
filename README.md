@@ -16,7 +16,7 @@
 - 提供开发环境明文模拟接口、消息列表和详情查询接口；
 - 健康检查和本地自动化测试。
 
-当前未实现：自动命令识别、定时发送、真实 `response_url` 协议联调、图片或文件下载、OCR 和真实交建通前端页面。
+当前未实现：生产环境自动命令识别、定时发送、真实 `response_url` 协议联调、文件内容识别，以及在真实交建通消息协议中发送图文卡片。开发验收页面已经提供仅限本地 Mock 的日报命令自动闭环。
 
 ## 环境要求与安装
 
@@ -150,7 +150,7 @@ https://你的公网HTTPS域名/api/jjt/callback
 - `ignored`：分数不高于 1，普通聊天或不像日报；
 - `not_applicable`：不是 `text`/`mixed` 正文消息，或正文为空。
 
-当前 `rules-v1` 规则与分数：
+当前 `rules-v3` 规则与分数：
 
 | 规则 | 分数 |
 | --- | ---: |
@@ -162,8 +162,9 @@ https://你的公网HTTPS域名/api/jjt/callback
 | 包含“天气晴”“晴天”“小雨”等天气描述 | +1 |
 | 包含项目、标段、工区、楼栋、隧道、桥梁等工程场景词 | +1 |
 | 去除正文首尾空白后长度不少于 30 个字符 | +1 |
+| 不超过 30 字且明显是在询问或催要日报，如“今天的施工日报呢” | -4 |
 
-单独出现“日报”不会直接成为候选，所有规则都按总分阈值判断。
+单独出现“日报”不会直接成为候选，所有规则都按总分阈值判断。明显的日报询问会直接作为普通聊天过滤；仍有歧义的 `needs_review` 消息可由结构化提取阶段的大模型继续做相关性复核。
 
 在开发模式启动服务后，打开 Swagger <http://127.0.0.1:8000/docs>，使用 `POST /api/dev/mock-message` 提交测试消息。例如：
 
@@ -198,10 +199,11 @@ https://你的公网HTTPS域名/api/jjt/callback
 1. 查询消息及其初步识别结果；
 2. 拒绝 `ignored`、`not_applicable`、纯图片、文件、语音和空正文；
 3. 在 `project_reports` 中创建或更新唯一的 `pending` 记录；
-4. 独立大模型客户端只接收 `text_content`，要求返回纯 JSON；
-5. 使用严格 Pydantic 模型校验 JSON、字段类型、额外字段和缺失字段一致性；
-6. 成功时更新主记录，并替换 `report_equipment`、`report_work_items` 子项；
-7. 非法 JSON、字段类型错误、响应错误或超时会将当前结果更新为 `failed`，不会修改或删除原消息和初步识别结果。
+4. 独立大模型客户端只接收 `text_content`，同时返回相关性结论和结构化纯 JSON；
+5. 后端对原文中的月日日期做确定性补全，并忽略没有明确 `content` 的孤立施工子项，所有处理都保存来源或警告；
+6. 使用严格 Pydantic 模型校验 JSON、字段类型、额外字段和缺失字段一致性；
+7. 成功时更新主记录，并替换 `report_equipment`、`report_work_items` 子项；
+8. 非法 JSON、其他字段类型错误、响应错误或超时会将当前结果更新为 `failed`，不会修改或删除原消息和初步识别结果。
 
 结构化字段：
 
@@ -221,9 +223,16 @@ https://你的公网HTTPS域名/api/jjt/callback
 | `confidence` | 大模型给出的 0–1 提取置信度；人工结果可以为空 |
 | `extraction_status` | `pending`、`completed`、`needs_review` 或 `failed` |
 | `extraction_source` | `llm` 或 `manual` |
+| `relevance_status` | `report`、`related_update`、`ordinary_chat`、`uncertain` 或历史记录的 `not_reviewed` |
+| `relevance_reason` | 大模型对相关性判断的简短依据 |
+| `relevance_confidence` | 0–1 的相关性置信度 |
+| `date_source` | 日期来自模型、原文完整日期、月日结合消息年份或人工修正 |
+| `normalization_warnings` | 被安全忽略的异常施工子项等确定性处理记录 |
 | `raw_extraction_json` | 大模型原始返回文本，仅存储，不执行 |
 
-原文没有提供的标量字段必须返回 `null`；没有机械或施工项时，相应字段也必须为 `null`。这些字段必须同时列入 `missing_fields`，不能使用空字符串、空数组或编造的默认值。服务会复核 `missing_fields` 与所有 `null` 字段是否完全一致。缺少 `project_name`、`report_date` 或 `work_items` 任一关键字段时，即使其他字段校验通过，状态仍为 `needs_review`。
+原文没有提供的标量字段必须返回 `null`；没有机械或施工项时，相应字段也必须为 `null`。这些字段必须同时列入 `missing_fields`，不能使用空字符串、空数组或编造的默认值。服务会复核 `missing_fields` 与所有 `null` 字段是否完全一致。原文明示完整年月日时直接使用；只写“8月10日”等月日时，以消息接收时间为基准选择最近的合理年份并记录 `date_source=text_month_day_message_year`。完全没有月日仍保持 `null`。缺少 `project_name`、可解析日期或 `work_items` 任一关键字段时，状态仍为 `needs_review`。
+
+相关性结论与字段完整度互不混用：`report` 进入正常日报判定；`related_update` 表示施工补充但不是完整日报；`ordinary_chat` 会把本地识别结果复核为 `ignored`，不需要人工补齐日报字段；`uncertain` 才继续交给人工判断。大模型原始 JSON 始终保留。若一个施工子项只有位置而没有任何明确施工内容，后端不会编造内容，而是忽略该子项、写入 `normalization_warnings`，其余有效字段仍可保存。
 
 大模型使用兼容 Chat Completions 的接口，所有配置均来自 `.env`，项目没有硬编码 API Key、模型名或 base URL：
 
@@ -262,6 +271,61 @@ LLM_MAX_RETRIES=1
 
 单条结构化结果可以进入下一节的确定性汇总预览，但项目字段提取本身仍不会自动触发。
 
+## 群聊施工图片识别与项目关联
+
+群聊中的纯图片和 mixed 图片可以通过独立视觉识别流程提取图片内文字和可见施工信息。该流程不会改变原消息、规则识别结果或结构化日报，也不会把图片识别出的人员、机械数量直接写入数值统计。
+
+每张图片的识别结果保存在 `message_image_recognitions`，包括图片中可见的项目名称、日期、拍摄时间、天气、地点、施工内容、OCR 文字、现场描述、置信度和图片 SHA-256。图片与结构化项目日报的关系独立保存在 `project_report_images`。
+
+自动关联使用以下确定性评分：
+
+| 关联依据 | 分数 |
+| --- | ---: |
+| 图片项目名称完全匹配 | +5 |
+| 项目名称高度相似 | +4 |
+| 项目名称部分相似 | +3 |
+| 图片和日报包含相同施工关键词 | +2 |
+| 图片与日报发送人相同 | +2 |
+| 发送时间相差不超过 10 分钟 | +2 |
+| 发送时间相差不超过 30 分钟 | +1 |
+| 图片日期与日报日期一致 | +1 |
+
+同一 `chatid` 和日期是候选范围。自动关联必须同时满足：最高分不低于 5、命中项目名称或施工关键词等内容证据，并且领先第二候选至少 2 分。只有“同一发送人、时间接近”而没有内容证据时会标记为 `needs_review`，不会自动绑定项目。
+
+关联状态：
+
+- `linked`：证据充分，已自动关联；
+- `needs_review`：存在候选项目，但需要人工确认；
+- `unmatched`：没有可信候选；
+- `manual`：人工指定的项目关联。
+
+视觉模型使用兼容 Chat Completions 的多模态接口，需支持 `image_url` data URL：
+
+```dotenv
+VISION_API_KEY=替换为视觉模型密钥
+VISION_MODEL=替换为支持图片的模型名称
+VISION_BASE_URL=https://你的兼容服务地址/v1
+VISION_TIMEOUT_SECONDS=90
+VISION_MAX_RETRIES=1
+IMAGE_DOWNLOAD_TIMEOUT_SECONDS=15
+IMAGE_MAX_BYTES=10000000
+ENABLE_AUTO_IMAGE_RECOGNITION=false
+```
+
+`VISION_API_KEY` 和 `VISION_BASE_URL` 未单独设置时可沿用对应的 `LLM_*` 配置，但 `VISION_MODEL` 必须明确配置为支持图片的模型。未配置视觉模型时服务仍能启动，手动识别接口返回 HTTP 503。
+
+接口：
+
+- `POST /api/messages/{msgid}/recognize-images`：识别一条群聊消息中的全部图片并执行项目关联；
+- `GET /api/image-recognitions`：按 `chatid`、`recognition_status`、`association_status` 查询；
+- `PATCH /api/image-recognitions/{attachment_id}/association`：通过 `project_report_id` 人工指定项目，传 `null` 可取消关联。
+
+默认 `ENABLE_AUTO_IMAGE_RECOGNITION=false`，避免产生未预期费用。启用后，图片消息仍会先成功入库并立即完成交建通回调，随后使用后台任务和独立数据库会话识别；识别失败不会造成原消息丢失。
+
+远程图片只允许 HTTPS，不跟随重定向，并拒绝解析到内网、回环或链路本地地址；下载有超时和 10MB 默认上限，仅接受 PNG、JPEG、WEBP。真实群图片在识别时只加载到内存，不会永久下载到磁盘。开发页面上传的模拟图片保存在 `JJT_MESSAGE_DATA_DIR/dev-images`，用于离线联调。
+
+汇总 JSON 会把已确认图片放入对应 `projects[].images`。Markdown 在项目施工内容下增加“现场图片与识别补充”，包含图片、施工补充、地点、拍摄时间和 OCR 文字。`needs_review`、`unmatched` 或识别失败的图片不会贴入项目，而是进入 `image_reviews` 和“待人工确认图片”。这些内容只用于展示和人工核对，不改变项目数量、人员、机械或进度统计。
+
 ## 按群聊和日期生成 Markdown 汇总预览
 
 汇总范围由 `chatid + report_date` 精确确定。程序查询该范围内的 `project_reports`，只让非重复且 `extraction_status=completed` 的日报进入项目数量、人员和机械统计。`needs_review`、`failed`、`pending` 不进入数值汇总，但会出现在 `warnings`、`review_reports` 和 Markdown 的“待确认和缺失信息”部分。
@@ -273,6 +337,7 @@ LLM_MAX_RETRIES=1
 - 机械按 `name + unit` 分组，同名但单位不同的机械不会合并；
 - 各项目施工内容、明日计划、安全和质量情况按保存的结构化字段展示；
 - 原有 `missing_fields` 以及实际检测到的空字段都会进入缺失信息和警告。
+- `normalization_warnings` 会进入汇总告警和待确认列表，但有效日报仍按原有人数、机械规则参与统计。
 
 系统按 `project_name + report_date` 检查重复。只要同一项目同一天关联多条结构化日报，相关记录全部暂不进入数值合计，项目会进入 `duplicate_projects`，返回每条来源的 `msgid` 和 `project_report_id`，汇总状态设置为 `needs_review`，等待人工先处理单条日报。
 
@@ -303,7 +368,7 @@ Content-Type: application/json
 - `GET /api/daily-reports/{summary_id}`：返回保存时的来源快照和 Markdown；
 - 相同 `chatid + report_date` 可以重复保存，每次都会生成新的快照，并通过 `daily_report_summary_items` 保存当次来源及顺序，不覆盖历史记录。
 
-Markdown 固定包含标题日期、总体人数、机械汇总、各项目施工情况、明日计划、安全质量以及待确认和缺失信息。预览和快照保存阶段不会调用 `response_url`；只有下一节的显式人工确认和手动发送接口可以进入离线发送闭环。
+Markdown 固定包含标题日期、总体人数、机械汇总、各项目施工情况、已关联现场图片及识别补充、明日计划、安全质量以及待确认和缺失信息。预览和快照保存阶段不会调用 `response_url`；只有下一节的显式人工确认和手动发送接口可以进入离线发送闭环。
 
 ## 聊天式本地验收页面
 
@@ -336,7 +401,24 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 路基三标2026年8月6日施工日报，天气晴，管理人员2人，施工人员18人，压路机2台，今日完成K12路基填筑200米，明日进行下一层填筑，安全正常，质量合格。
 ```
 
-发送后，消息卡片会先展示本地规则初筛状态、分数、命中规则和原因。对“日报候选”或“待大模型复核”的消息，页面会自动调用现有 `POST /api/messages/{msgid}/extract-report`，使用大模型提取 `project_name`、`report_date`、天气、人数、机械和施工内容，再决定是否确实需要人工处理；“提取结构化字段”按钮仍保留用于手动重试。点击“生成汇总预览”时，页面也会先检查当前群聊中尚未结构化的候选消息并补做大模型提取，避免“消息已接收但右侧项目数仍为 0”。
+发送后，消息卡片会先展示本地规则初筛状态、分数、命中规则和原因。明显的“日报呢”“日报发了吗”等询问会在本地直接作为普通聊天过滤。对其余“日报候选”或“待大模型复核”消息，页面会自动调用现有 `POST /api/messages/{msgid}/extract-report`，由大模型同时判断 `report`、`related_update`、`ordinary_chat`、`uncertain` 并提取字段。大模型确认的普通聊天不会进入汇总，也不要求人工补齐字段；“提取结构化字段”按钮仍保留用于手动重试。点击“生成汇总预览”时，页面也会先检查当前群聊中尚未结构化的候选消息并补做复核。
+
+在 Mock 聊天输入框中还可以直接发送日报命令，例如：
+
+```text
+生成8月10日施工日报
+汇总2026年8月10日日报
+发送今天施工日报
+查看8月10日日报
+```
+
+月日命令会选择距离本机当天最近的年份；“今天”“今日”“当天”使用本机当天日期。命令消息本身会被本地规则标记为普通聊天，不会被误提取成项目日报。页面随后自动执行：补提取当前群聊候选消息 → 生成指定日期预览 → 保存汇总快照 → 以当前发送人自动确认 → 创建服务端 Mock 触发消息 → 使用 `MockResponseUrlClient` 模拟发送。完成后可在聊天区和右侧工作台看到 `sent` 状态及发送记录，全程不访问真实外部网络。
+
+以下情况属于硬阻断，自动流程只停留在预览并展示告警，不会保存、确认或发送：没有可汇总的有效日报、同一项目同一天存在重复日报、存在 `pending`、`failed` 或 `needs_review` 等未完成提取记录。只有天气、安全、质量、明日计划等非关键字段缺失，且项目仍是非重复 `completed` 日报时，允许保留告警继续完成本地 Mock 发送；缺失人数仍不会按 0 统计。
+
+Mock 模式启动时还会扫描带有历史大模型原始 JSON 的可恢复结构化记录。若旧记录只是“原文仅写月日”或“单个施工子项内容为空”，服务会仅依据已保存原文和原始 JSON 重新校验并原位修复，不调用大模型、不产生调用费用，也不修改原消息；非法 JSON 和错误字段类型会继续保持 `failed`，等待后续重试或人工检查。
+
+输入框旁的“发送图片”支持 PNG、JPEG、WEBP，最大 10MB。开发页面会调用 `POST /api/dev/mock-image-message` 保存本地图片，再调用视觉识别接口并显示 OCR、施工内容和项目关联状态；已可靠关联的图片会在下一次汇总预览中出现在对应项目下方。
 
 自动提取需要提前配置 `LLM_API_KEY`、`LLM_MODEL` 和 `LLM_BASE_URL`。长日报超过单次等待时间时会按 `LLM_MAX_RETRIES` 自动重试；仍失败时原消息和失败审计都会保留，页面会显示中文错误和手动重试入口。下次点击“生成汇总预览”也会自动重试上次因超时或网络错误失败的日报，不会伪造提取结果。规则初筛的 `needs_review` 只表示特征不足、需要先交给大模型复核；只有大模型提取后仍缺少项目名称、日报日期或施工内容等关键字段时，才进入真正的人工处理流程。
 
@@ -446,7 +528,7 @@ Content-Type: application/json
 
 虽然提供了 `ENABLE_REAL_RESPONSE_SEND` 安全开关，但本地交建通材料没有给出可核验的 `response_url` 请求体协议。为遵守“不猜测协议字段”的要求，真实模式当前会在网络请求前以 `response_protocol_not_confirmed` 失败并留存审计记录；待交建通回调联调确认请求体、目标域名和返回码语义后才能启用真实 HTTP 传输。后续真实实现必须只允许 HTTPS、设置超时且禁止跨域重定向。
 
-`response_url` 通常具有一次性和时效性，只应用于紧邻当前回调的发送，不应把历史消息中的地址当作长期凭据反复使用。本阶段不会自动识别“生成日报”命令，也不会自动或定时发送。
+`response_url` 通常具有一次性和时效性，只应用于紧邻当前回调的发送，不应把历史消息中的地址当作长期凭据反复使用。当前只有 `/dev/chat` 会识别“生成日报”等本地验收命令并使用服务端生成的 `mock://` 地址自动完成离线闭环；真实交建通回调不会自动识别命令，也不会自动或定时发送。
 
 ## 企业微信自建应用验证
 
@@ -623,7 +705,7 @@ JSONL 审计文件仍使用进程内有限 LRU 去重，进程重启后这部分
 data/jjt_bot.db
 ```
 
-SQLite 以 `messages` 和 `message_attachments` 保存消息及附件，并以独立表保存规则识别、单条结构化日报、汇总快照、来源关联和发送尝试。`messages.msgid` 有数据库唯一约束，可在多请求并发时防止重复；附件与所属消息在同一事务内写入。当前只保存图片、文件的 URL、类型、下载状态和 MD5 等元数据，不会访问 URL 或下载文件。数据库文件、WAL 和 journal 文件均已加入 `.gitignore`。
+SQLite 以 `messages` 和 `message_attachments` 保存消息及附件，并以独立表保存规则识别、单条结构化日报、图片识别与项目关联、汇总快照、来源关联和发送尝试。`messages.msgid` 有数据库唯一约束，可在多请求并发时防止重复；附件与所属消息在同一事务内写入。文件附件仍只保存 URL、类型、下载状态和 MD5 元数据；施工图片仅在显式或已启用的后台识别流程中按安全限制读取。数据库文件、WAL 和 journal 文件均已加入 `.gitignore`。
 
 ## 测试
 

@@ -10,6 +10,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 ExtractionStatus = Literal["pending", "completed", "needs_review", "failed"]
 ExtractionSource = Literal["llm", "manual"]
+RelevanceStatus = Literal[
+    "not_reviewed", "report", "related_update", "ordinary_chat", "uncertain"
+]
+LLMRelevanceStatus = Literal[
+    "report", "related_update", "ordinary_chat", "uncertain"
+]
+DateSource = Literal[
+    "missing", "llm", "text_full_date", "text_month_day_message_year", "manual"
+]
 ExtractedFieldName = Literal[
     "project_name",
     "report_date",
@@ -76,6 +85,9 @@ class ReportExtractionPayload(BaseModel):
     quality_status: str | None
     missing_fields: list[ExtractedFieldName]
     confidence: float = Field(ge=0, le=1)
+    relevance_status: LLMRelevanceStatus = "report"
+    relevance_reason: str = "包含可结构化的施工日报信息"
+    relevance_confidence: float = Field(default=1.0, ge=0, le=1)
 
     @field_validator(
         "project_name",
@@ -88,6 +100,13 @@ class ReportExtractionPayload(BaseModel):
     def optional_text_cannot_be_blank(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
             raise ValueError("未提供的文本字段必须使用 null")
+        return value
+
+    @field_validator("relevance_reason")
+    @classmethod
+    def relevance_reason_cannot_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("relevance_reason 不能为空")
         return value
 
     @field_validator("equipment", "work_items")
@@ -171,6 +190,11 @@ class ProjectReportResponse(BaseModel):
     confidence: float | None
     extraction_status: ExtractionStatus
     extraction_source: ExtractionSource
+    relevance_status: RelevanceStatus
+    relevance_reason: str | None
+    relevance_confidence: float | None
+    date_source: DateSource
+    normalization_warnings: list[str]
     raw_extraction_json: str | None
     error_message: str | None
     created_at: datetime

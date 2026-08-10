@@ -3,10 +3,12 @@
 const page = document.body;
 const endpoints = {
   mock: page.dataset.mockEndpoint,
+  mockImage: page.dataset.mockImageEndpoint,
   mockTrigger: page.dataset.mockTriggerEndpoint,
   messages: page.dataset.messagesEndpoint,
   detections: page.dataset.detectionsEndpoint,
   reports: page.dataset.projectReportsEndpoint,
+  imageRecognitions: page.dataset.imageRecognitionsEndpoint,
   summaries: page.dataset.dailyReportsEndpoint,
 };
 
@@ -22,6 +24,8 @@ const messageInput = document.querySelector("#message-input");
 const senderUserid = document.querySelector("#sender-userid");
 const senderName = document.querySelector("#sender-name");
 const sendButton = document.querySelector("#send-button");
+const imageInput = document.querySelector("#image-input");
+const imageButton = document.querySelector("#image-button");
 const reportDate = document.querySelector("#report-date");
 const previewButton = document.querySelector("#preview-button");
 const summaryResult = document.querySelector("#summary-result");
@@ -52,6 +56,13 @@ const extractionLabels = {
   completed: "提取完成",
   needs_review: "信息不完整，需确认",
   failed: "结构化提取失败",
+};
+const relevanceLabels = {
+  not_reviewed: "尚未复核相关性",
+  report: "大模型确认施工日报",
+  related_update: "施工补充消息",
+  ordinary_chat: "大模型确认普通聊天",
+  uncertain: "相关性不确定",
 };
 const generationLabels = {
   completed: "汇总完成",
@@ -363,8 +374,17 @@ function workItemsText(items) {
 function renderExtraction(report) {
   const card = node("section", "extraction-card");
   const heading = node("div", "detection-top");
-  heading.append(node("h3", "", "结构化日报字段"), statusPill(report.extraction_status, extractionLabels));
+  const statusNode = report.relevance_status === "ordinary_chat"
+    ? node("span", "pill muted", relevanceLabels.ordinary_chat)
+    : statusPill(report.extraction_status, extractionLabels);
+  heading.append(node("h3", "", "结构化日报字段"), statusNode);
   card.append(heading);
+  const relevance = node("p", "detection-reason", `相关性复核：${relevanceLabels[report.relevance_status] || "未知"}。${display(report.relevance_reason, "")}`);
+  card.append(relevance);
+  if (report.relevance_status === "ordinary_chat") {
+    card.append(node("p", "input-hint", "该消息不会进入项目日报汇总，也不需要人工补齐日报字段。"));
+    return card;
+  }
   const grid = node("dl", "data-grid");
   addDataItem(grid, "项目名称", report.project_name);
   addDataItem(grid, "日报日期", report.report_date);
@@ -380,12 +400,29 @@ function renderExtraction(report) {
     fieldListText(report.missing_fields),
     true,
   );
+  if (Array.isArray(report.normalization_warnings) && report.normalization_warnings.length) {
+    addDataItem(grid, "规范化提醒", report.normalization_warnings.join("；"), true);
+  }
   if (report.error_message) addDataItem(grid, "错误说明", report.error_message, true);
   card.append(grid);
   return card;
 }
 
-function renderMessage(message, detection, report) {
+function renderImageRecognition(recognition) {
+  const card = node("section", "recognition-card");
+  const association = recognition.association;
+  const associationText = association
+    ? `${association.association_status} · ${association.project_name || "项目待确认"}`
+    : "尚未关联项目";
+  card.append(node("strong", "", `图片识别：${recognition.recognition_status} · ${associationText}`));
+  if (recognition.construction_content) card.append(node("p", "", `施工补充：${recognition.construction_content}`));
+  if (recognition.location) card.append(node("p", "", `地点：${recognition.location}`));
+  if (recognition.ocr_text) card.append(node("p", "", `图片文字：${recognition.ocr_text}`));
+  if (recognition.error_message) card.append(node("p", "", `失败原因：${recognition.error_message}`));
+  return card;
+}
+
+function renderMessage(message, detection, report, recognitions = []) {
   const row = node("article", "message-row user");
   row.dataset.msgid = message.msgid;
   const name = senderNames.get(message.sender_userid) || message.sender_userid || "测试用户";
@@ -393,9 +430,18 @@ function renderMessage(message, detection, report) {
   const body = node("div", "message-body");
   const meta = node("div", "message-meta");
   meta.append(node("span", "", name), node("span", "", timeLabel(message.received_at)));
-  body.append(meta, node("div", "bubble", display(message.text_content, "（非文本消息）")));
+  const bubble = node("div", "bubble", display(message.text_content, message.image_urls?.length ? "现场图片" : "（非文本消息）"));
+  for (const imageUrl of message.image_urls || []) {
+    const image = node("img", "message-image");
+    image.src = imageUrl;
+    image.alt = "群聊施工图片";
+    image.loading = "lazy";
+    bubble.append(image);
+  }
+  body.append(meta, bubble);
   if (detection) body.append(renderDetection(detection, message.msgid));
   if (report) body.append(renderExtraction(report));
+  for (const recognition of recognitions) body.append(renderImageRecognition(recognition));
   row.append(body);
   return row;
 }
@@ -408,19 +454,31 @@ async function loadChat() {
   messageList.append(loading);
   const query = `chatid=${encodeURIComponent(currentChatid)}&limit=500`;
   try {
-    const [messages, detections, reports] = await Promise.all([
+    const [messages, detections, reports, imageRecognitions] = await Promise.all([
       apiRequest(`${endpoints.messages}?${query}`, {}, "加载消息"),
       apiRequest(`${endpoints.detections}?${query}`, {}, "加载识别结果"),
       apiRequest(`${endpoints.reports}?${query}`, {}, "加载提取结果"),
+      apiRequest(`${endpoints.imageRecognitions}?${query}`, {}, "加载图片识别结果"),
     ]);
     const detectionByMsgid = new Map((detections.items || []).map(item => [item.msgid, item]));
     const reportByMsgid = new Map((reports.items || []).map(item => [item.msgid, item]));
+    const recognitionsByMsgid = new Map();
+    for (const item of imageRecognitions.items || []) {
+      const current = recognitionsByMsgid.get(item.msgid) || [];
+      current.push(item);
+      recognitionsByMsgid.set(item.msgid, current);
+    }
     const items = [...(messages.items || [])].sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)));
     messageCount.textContent = items.length >= 500 ? "最近 500 条消息" : `共 ${items.length} 条消息`;
     messageList.replaceChildren();
     renderSystemMessage("欢迎使用施工日报本地验收页。这里的消息只进入本地 mock 接口，不会发送到真实交建通群聊。");
     for (const item of items) {
-      messageList.append(renderMessage(item, detectionByMsgid.get(item.msgid), reportByMsgid.get(item.msgid)));
+      messageList.append(renderMessage(
+        item,
+        detectionByMsgid.get(item.msgid),
+        reportByMsgid.get(item.msgid),
+        recognitionsByMsgid.get(item.msgid) || [],
+      ));
     }
     messageList.scrollTop = messageList.scrollHeight;
   } catch (error) {
@@ -435,6 +493,133 @@ function uniqueMsgid() {
     ? window.crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   return `dev-chat-${suffix}`;
+}
+
+function formatLocalDate(value) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function validLocalDate(year, month, day) {
+  const value = new Date(year, month - 1, day);
+  if (
+    value.getFullYear() !== year
+    || value.getMonth() !== month - 1
+    || value.getDate() !== day
+  ) return null;
+  return value;
+}
+
+function nearestMonthDay(month, day) {
+  const today = new Date();
+  const candidates = [today.getFullYear() - 1, today.getFullYear(), today.getFullYear() + 1]
+    .map(year => validLocalDate(year, month, day))
+    .filter(Boolean);
+  if (!candidates.length) return null;
+  candidates.sort((left, right) => (
+    Math.abs(left.getTime() - today.getTime()) - Math.abs(right.getTime() - today.getTime())
+  ));
+  return candidates[0];
+}
+
+function parseMockReportCommand(content) {
+  const text = String(content || "").trim();
+  if (!/(?:生成|汇总|发送|查看)/.test(text) || !/(?:施工日报|项目日报|日报)/.test(text)) {
+    return null;
+  }
+  let resolved = null;
+  let match = text.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]/);
+  if (match) resolved = validLocalDate(Number(match[1]), Number(match[2]), Number(match[3]));
+  if (!resolved) {
+    match = text.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (match) resolved = validLocalDate(Number(match[1]), Number(match[2]), Number(match[3]));
+  }
+  if (!resolved) {
+    match = text.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]/);
+    if (match) resolved = nearestMonthDay(Number(match[1]), Number(match[2]));
+  }
+  if (!resolved && /今天|今日|当天/.test(text)) resolved = new Date();
+  if (!resolved) return { error: "请在命令中写明日期，例如：生成8月10日施工日报" };
+  return { reportDate: formatLocalDate(resolved) };
+}
+
+function mockCommandHasBlockers(preview) {
+  return (
+    Number(preview.project_count || 0) < 1
+    || (preview.duplicate_projects || []).length > 0
+    || (preview.review_reports || []).some(item => item.extraction_status !== "completed")
+  );
+}
+
+async function runMockReportCommand(command) {
+  if (command.error) {
+    renderSystemMessage(command.error, "error");
+    showToast(command.error, true);
+    return;
+  }
+  reportDate.value = command.reportDate;
+  renderSystemMessage(`已识别日报命令，正在自动生成 ${command.reportDate} 的汇总日报…`);
+  const extractionReady = await extractPendingReportsBeforePreview();
+  if (!extractionReady) return;
+
+  const payload = { chatid: currentChatid, report_date: command.reportDate };
+  const preview = await apiRequest(
+    `${endpoints.summaries}/preview`,
+    { method: "POST", body: JSON.stringify(payload), debugBody: payload },
+    "命令生成汇总预览",
+  );
+  renderSummary(preview);
+  renderSummaryChatMessage(preview);
+  if (mockCommandHasBlockers(preview)) {
+    renderSystemMessage(
+      "汇总预览已生成，但存在无有效日报、重复项目或未完成提取记录，已停止自动发送，请先查看告警。",
+      "error",
+    );
+    showToast("存在阻断项，已停止自动发送。", true);
+    return;
+  }
+
+  const saved = await apiRequest(
+    endpoints.summaries,
+    { method: "POST", body: JSON.stringify(payload), debugBody: payload },
+    "命令保存汇总快照",
+  );
+  const confirmation = {
+    confirmed_by: senderUserid.value,
+    confirmation_note: preview.generation_status === "completed"
+      ? "Mock聊天命令自动确认"
+      : "Mock聊天命令自动确认；缺失信息已保留在汇总告警中",
+  };
+  const confirmed = await apiRequest(
+    `${endpoints.summaries}/${saved.id}/confirm`,
+    { method: "POST", body: JSON.stringify(confirmation), debugBody: confirmation },
+    "命令自动确认汇总",
+  );
+  const triggerPayload = { chatid: currentChatid, summary_id: saved.id };
+  const trigger = await apiRequest(
+    endpoints.mockTrigger,
+    { method: "POST", body: JSON.stringify(triggerPayload), debugBody: triggerPayload },
+    "命令创建Mock触发消息",
+  );
+  const sendPayload = { trigger_msgid: trigger.trigger_msgid };
+  const sendResult = await apiRequest(
+    `${endpoints.summaries}/${saved.id}/send`,
+    { method: "POST", body: JSON.stringify(sendPayload), debugBody: sendPayload },
+    "命令自动Mock发送",
+  );
+  const sentSummary = {
+    ...confirmed,
+    publication_status: sendResult.publication_status,
+    sent_at: sendResult.sent_at,
+  };
+  const snapshotArea = node("section", "snapshot-area");
+  snapshotArea.append(node("div", "snapshot-notice", `自动闭环完成，summary_id=${saved.id}`));
+  summaryResult.append(snapshotArea);
+  renderConfirmationCard(sentSummary, snapshotArea, sendResult);
+  renderMockSendChatMessage(sentSummary, sendResult);
+  showToast(`${command.reportDate} 日报已完成本地Mock发送。`);
 }
 
 async function sendMessage() {
@@ -464,13 +649,79 @@ async function sendMessage() {
     await loadChat();
     const label = detectionLabels[result.detection_status] || "已接收";
     renderSystemMessage(`消息已保存，识别结果：${label}。${display(result.reason, "")}`);
-    await autoExtractNewMessage(result);
+    const command = parseMockReportCommand(content);
+    if (command) {
+      await runMockReportCommand(command);
+    } else {
+      await autoExtractNewMessage(result);
+    }
   } catch (error) {
     renderSystemMessage(error.message, "error");
     showToast(error.message, true);
   } finally {
     sendButton.disabled = false;
     messageInput.focus();
+  }
+}
+
+function fileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const value = String(reader.result || "");
+      resolve(value.includes(",") ? value.split(",", 2)[1] : "");
+    });
+    reader.addEventListener("error", () => reject(new Error("读取图片失败")));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function sendImage(file) {
+  if (!file) return;
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    showToast("仅支持 PNG、JPEG 或 WEBP 图片。", true);
+    return;
+  }
+  if (file.size > 10_000_000) {
+    showToast("图片不能超过 10MB。", true);
+    return;
+  }
+  imageButton.disabled = true;
+  try {
+    const payload = {
+      chatid: currentChatid,
+      sender_userid: senderUserid.value,
+      sender_name: senderName.value,
+      filename: file.name,
+      content_type: file.type,
+      image_base64: await fileAsBase64(file),
+    };
+    const result = await apiRequest(
+      endpoints.mockImage,
+      { method: "POST", body: JSON.stringify(payload), debugBody: { ...payload, image_base64: "[图片数据已隐藏]" } },
+      "发送模拟图片",
+    );
+    await loadChat();
+    renderSystemMessage("图片已保存，正在调用视觉模型识别并匹配项目…");
+    try {
+      await apiRequest(
+        `${endpoints.messages}/${encodeURIComponent(result.msgid)}/recognize-images`,
+        { method: "POST", debugBody: {} },
+        "图片识别",
+      );
+      await loadChat();
+      if (reportDate.value) await previewSummary({ skipAutoExtraction: true });
+      showToast("图片识别和项目匹配已完成。");
+    } catch (error) {
+      await loadChat();
+      renderSystemMessage(`图片已经保存，但识别尚未完成。${error.message}`, "error");
+      showToast(error.message, true);
+    }
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    imageButton.disabled = false;
+    imageInput.value = "";
   }
 }
 
@@ -498,11 +749,17 @@ async function autoExtractNewMessage(messageResult) {
     const report = await requestReportExtraction(messageResult.msgid);
     if (report.report_date) reportDate.value = report.report_date;
     await loadChat();
-    renderSystemMessage(
-      report.extraction_status === "needs_review"
-        ? `大模型已完成复核，但仍缺少：${fieldListText(report.missing_fields)}，需要人工处理。`
-        : "大模型已完成结构化复核，右侧汇总已自动刷新。",
-    );
+    let reviewMessage = "大模型已完成结构化复核，右侧汇总已自动刷新。";
+    if (report.relevance_status === "ordinary_chat") {
+      reviewMessage = "大模型已确认这是普通聊天，不进入日报汇总。";
+    } else if (report.relevance_status === "related_update") {
+      reviewMessage = "大模型已确认这是施工补充消息，需要关联或人工确认后再处理。";
+    } else if (report.relevance_status === "uncertain") {
+      reviewMessage = "大模型仍无法确定消息相关性，需要人工确认。";
+    } else if (report.extraction_status === "needs_review") {
+      reviewMessage = `大模型已完成复核，但仍缺少：${fieldListText(report.missing_fields)}，需要人工处理。`;
+    }
+    renderSystemMessage(reviewMessage);
     await previewSummary({ skipAutoExtraction: true });
     return report;
   } catch (error) {
@@ -538,11 +795,17 @@ async function extractReport(msgid) {
       if (oldCard) oldCard.remove();
       body.append(renderExtraction(report));
     }
-    renderSystemMessage(
-      report.extraction_status === "needs_review"
-        ? "结构化字段已提取，但存在缺失字段，需要人工确认。"
-        : "结构化字段提取完成，可继续生成汇总预览。",
-    );
+    let resultMessage = "结构化字段提取完成，可继续生成汇总预览。";
+    if (report.relevance_status === "ordinary_chat") {
+      resultMessage = "大模型已确认这是普通聊天，不进入日报汇总。";
+    } else if (report.relevance_status === "related_update") {
+      resultMessage = "这是施工补充消息，需要关联或人工确认。";
+    } else if (report.relevance_status === "uncertain") {
+      resultMessage = "消息相关性仍不确定，需要人工确认。";
+    } else if (report.extraction_status === "needs_review") {
+      resultMessage = "结构化字段已提取，但存在缺失字段，需要人工确认。";
+    }
+    renderSystemMessage(resultMessage);
     if (report.report_date) {
       reportDate.value = report.report_date;
       await previewSummary({ skipAutoExtraction: true });
@@ -649,7 +912,18 @@ function renderMarkdown(markdown, summaryData) {
         list = node("ul");
         container.append(list);
       }
-      list.append(node("li", "", bullet[1]));
+      const item = node("li");
+      const markdownImage = bullet[1].match(/^!\[([^\]]*)\]\(<([^>]+)>\)$/);
+      if (markdownImage) {
+        const image = node("img");
+        image.alt = markdownImage[1];
+        image.src = markdownImage[2];
+        image.loading = "lazy";
+        item.append(image);
+      } else {
+        item.textContent = bullet[1];
+      }
+      list.append(item);
       continue;
     }
     list = null;
@@ -1182,6 +1456,8 @@ messageList.addEventListener("keydown", event => {
   }
 });
 previewButton.addEventListener("click", previewSummary);
+imageButton.addEventListener("click", () => imageInput.click());
+imageInput.addEventListener("change", () => sendImage(imageInput.files?.[0]));
 document.querySelector("#dialog-close").addEventListener("click", () => dialog.close());
 dialog.addEventListener("click", event => {
   if (event.target === dialog) dialog.close();

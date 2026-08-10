@@ -8,10 +8,12 @@
 </head>
 <body
   data-mock-endpoint="/api/dev/mock-message"
+  data-mock-image-endpoint="/api/dev/mock-image-message"
   data-mock-trigger-endpoint="/api/dev/mock-trigger-message"
   data-messages-endpoint="/api/messages"
   data-detections-endpoint="/api/report-detections"
   data-project-reports-endpoint="/api/project-reports"
+  data-image-recognitions-endpoint="/api/image-recognitions"
   data-daily-reports-endpoint="/api/daily-reports"
 >
   <div class="app-shell">
@@ -80,10 +82,14 @@
           </select>
         </div>
         <div class="input-row">
-          <textarea id="message-input" name="message" rows="3" maxlength="8000" placeholder="输入施工日报或普通聊天消息…" aria-label="消息输入框" required></textarea>
-          <button id="send-button" class="primary-button send-button" type="submit">发送</button>
+          <textarea id="message-input" name="message" rows="3" maxlength="8000" placeholder="输入施工日报，或发送“生成8月10日施工日报”…" aria-label="消息输入框" required></textarea>
+          <div class="composer-actions">
+            <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+            <button id="image-button" class="secondary-button image-button" type="button">发送图片</button>
+            <button id="send-button" class="primary-button send-button" type="submit">发送文字</button>
+          </div>
         </div>
-        <p class="input-hint">Enter 发送 · Shift+Enter 换行</p>
+        <p class="input-hint">Enter 发送文字 · 支持“生成8月10日施工日报”自动Mock闭环 · 图片最大 10MB</p>
       </form>
     </main>
 

@@ -11,6 +11,7 @@ from app.api.callback import router as callback_router
 from app.api.daily_reports import router as daily_reports_router
 from app.api.dev_chat import router as dev_chat_router
 from app.api.messages import router as messages_router
+from app.api.image_recognitions import router as image_recognitions_router
 from app.api.mock import router as mock_router
 from app.api.project_reports import router as project_reports_router
 from app.api.report_detections import router as report_detections_router
@@ -23,10 +24,19 @@ from app.services.llm_extraction_client import (
     OpenAICompatibleExtractionClient,
     ReportExtractionClient,
 )
+from app.services.image_recognition_client import (
+    ImageContentLoader,
+    ImageRecognitionClient,
+    OpenAICompatibleImageRecognitionClient,
+    SafeImageContentLoader,
+)
 from app.services.response_url_client import (
     MockResponseUrlClient,
     RealResponseUrlClient,
     ResponseUrlClient,
+)
+from app.services.project_report_repair_service import (
+    repair_recoverable_project_reports,
 )
 
 
@@ -34,6 +44,8 @@ def create_app(
     settings: Settings | None = None,
     report_extraction_client: ReportExtractionClient | None = None,
     response_url_client: ResponseUrlClient | None = None,
+    image_recognition_client: ImageRecognitionClient | None = None,
+    image_content_loader: ImageContentLoader | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_env()
     active_settings.validate()
@@ -46,6 +58,9 @@ def create_app(
         app.state.settings = active_settings
         app.state.database_engine = database_runtime.engine
         app.state.session_factory = database_runtime.session_factory
+        if active_settings.mock_api_available:
+            with database_runtime.session_factory() as repair_session:
+                repair_recoverable_project_reports(repair_session)
         if report_extraction_client is not None:
             app.state.report_extraction_client = report_extraction_client
         elif active_settings.llm_configured:
@@ -58,6 +73,25 @@ def create_app(
             )
         else:
             app.state.report_extraction_client = None
+        if image_recognition_client is not None:
+            app.state.image_recognition_client = image_recognition_client
+        elif active_settings.vision_configured:
+            app.state.image_recognition_client = (
+                OpenAICompatibleImageRecognitionClient(
+                    api_key=active_settings.vision_api_key,
+                    model=active_settings.vision_model,
+                    base_url=active_settings.vision_base_url,
+                    timeout_seconds=active_settings.vision_timeout_seconds,
+                    max_retries=active_settings.vision_max_retries,
+                )
+            )
+        else:
+            app.state.image_recognition_client = None
+        app.state.image_content_loader = image_content_loader or SafeImageContentLoader(
+            local_root=active_settings.message_data_dir,
+            timeout_seconds=active_settings.image_download_timeout_seconds,
+            max_bytes=active_settings.image_max_bytes,
+        )
         if response_url_client is not None:
             app.state.response_url_client = response_url_client
         elif active_settings.enable_real_response_send:
@@ -95,6 +129,7 @@ def create_app(
     application.include_router(messages_router)
     application.include_router(report_detections_router)
     application.include_router(project_reports_router)
+    application.include_router(image_recognitions_router)
     application.include_router(daily_reports_router)
     if active_settings.mock_api_available:
         application.include_router(mock_router)

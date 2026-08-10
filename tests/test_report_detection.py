@@ -119,6 +119,28 @@ def test_ordinary_and_short_chat_is_ignored(
     assert body["is_report_candidate"] is False
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        "生成8月10日施工日报",
+        "汇总2026年8月10日日报",
+        "发送今天施工日报",
+        "查看8月10日日报",
+    ],
+)
+def test_mock_report_command_is_not_treated_as_project_report(
+    detection_client, content: str
+) -> None:
+    body = detection_client.post(
+        "/api/dev/mock-message",
+        json=text_message(f"mock-command-{abs(hash(content))}", content),
+    ).json()
+
+    assert body["detection_status"] == "ignored"
+    assert body["is_report_candidate"] is False
+    assert "识别为日报生成命令" in body["matched_rules"]
+
+
 def test_incomplete_suspected_report_needs_review(detection_client) -> None:
     body = detection_client.post(
         "/api/dev/mock-message",

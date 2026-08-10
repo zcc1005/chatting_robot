@@ -73,6 +73,7 @@ def init_db(runtime: DatabaseRuntime | None = None) -> None:
     _migrate_process_status_constraint(active_engine)
     Base.metadata.create_all(bind=active_engine)
     _migrate_daily_report_publication_columns(active_engine)
+    _migrate_project_report_review_columns(active_engine)
 
 
 def get_db(request: Request) -> Generator[Session, None, None]:
@@ -173,4 +174,32 @@ def _migrate_daily_report_publication_columns(active_engine: Engine) -> None:
         connection.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_daily_summaries_publication_status "
             "ON daily_report_summaries (publication_status)"
+        )
+
+
+def _migrate_project_report_review_columns(active_engine: Engine) -> None:
+    """为既有结构化日报补充相关性、日期来源和规范化审计字段。"""
+    inspector = inspect(active_engine)
+    if "project_reports" not in inspector.get_table_names():
+        return
+
+    existing = {
+        column["name"] for column in inspector.get_columns("project_reports")
+    }
+    additions = {
+        "relevance_status": "VARCHAR(32) NOT NULL DEFAULT 'not_reviewed'",
+        "relevance_reason": "TEXT",
+        "relevance_confidence": "FLOAT",
+        "date_source": "VARCHAR(64) NOT NULL DEFAULT 'missing'",
+        "normalization_warnings": "TEXT NOT NULL DEFAULT '[]'",
+    }
+    with active_engine.begin() as connection:
+        for name, sql_type in additions.items():
+            if name not in existing:
+                connection.exec_driver_sql(
+                    f'ALTER TABLE project_reports ADD COLUMN "{name}" {sql_type}'
+                )
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_project_reports_relevance_status "
+            "ON project_reports (relevance_status)"
         )

@@ -16,6 +16,9 @@ from app.services.llm_extraction_client import (
     LLMClientTimeout,
     ReportExtractionClient,
 )
+from app.services.report_extraction_normalizer import (
+    normalize_extraction_response,
+)
 
 
 class ReportNotEligibleError(ValueError):
@@ -60,8 +63,15 @@ def extract_and_save_report(
         save_failure(session, record, error_message="大模型调用失败")
         raise ReportExtractionFailedError("大模型调用失败") from exc
 
+    normalized = normalize_extraction_response(
+        raw_response,
+        text_content=message.text_content,
+        received_at=message.received_at,
+    )
     try:
-        payload = ReportExtractionPayload.model_validate_json(raw_response)
+        payload = ReportExtractionPayload.model_validate_json(
+            normalized.json_text
+        )
     except ValidationError as exc:
         error_types = {item["type"] for item in exc.errors()}
         error_message = (
@@ -77,4 +87,41 @@ def extract_and_save_report(
         )
         raise ReportExtractionFailedError(error_message) from None
 
-    return save_success(session, record, payload, raw_response)
+    saved = save_success(
+        session,
+        record,
+        payload,
+        raw_response,
+        date_source=normalized.date_source,
+        normalization_warnings=normalized.warnings,
+    )
+    _apply_relevance_review(message, payload)
+    session.commit()
+    return saved
+
+
+def _apply_relevance_review(
+    message: Message, payload: ReportExtractionPayload
+) -> None:
+    detection = message.report_detection
+    if detection is None:
+        return
+    status_mapping = {
+        "report": "report_candidate",
+        "related_update": "needs_review",
+        "ordinary_chat": "ignored",
+        "uncertain": "needs_review",
+    }
+    label_mapping = {
+        "report": "施工日报",
+        "related_update": "施工补充消息",
+        "ordinary_chat": "普通聊天",
+        "uncertain": "无法确定",
+    }
+    detection.detection_status = status_mapping[payload.relevance_status]
+    detection.is_report_candidate = payload.relevance_status == "report"
+    detection.reason = (
+        f"大模型相关性复核为{label_mapping[payload.relevance_status]}："
+        f"{payload.relevance_reason}"
+    )
+    detection.detector_version = "rules-v2+llm-relevance-v1"

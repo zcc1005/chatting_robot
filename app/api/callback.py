@@ -6,7 +6,16 @@ import json
 import logging
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -23,6 +32,9 @@ from app.services.crypto_service import (
 from app.services.message_storage import MessageStorage, MessageStorageError
 from app.services.message_normalizer import MessageNormalizationError
 from app.services.message_service import process_plain_message
+from app.services.image_recognition_tasks import (
+    schedule_image_recognition_if_enabled,
+)
 from app.services.xml_service import (
     XMLMessageError,
     normalize_plaintext_xml,
@@ -101,6 +113,7 @@ def verify_callback_url(
 )
 async def receive_callback_message(
     request: Request,
+    background_tasks: BackgroundTasks,
     msg_signature: str | None = Query(default=None),
     timestamp: str | None = Query(default=None),
     nonce: str | None = Query(default=None),
@@ -155,7 +168,10 @@ async def receive_callback_message(
 
     if callback_format == "json":
         try:
-            process_plain_message(message, "jjt", session)
+            result = process_plain_message(message, "jjt", session)
+            schedule_image_recognition_if_enabled(
+                background_tasks, request, result
+            )
         except MessageNormalizationError as exc:
             logger.warning("JSON callback normalization rejected: %s", type(exc).__name__)
             raise HTTPException(status_code=400, detail=str(exc)) from None

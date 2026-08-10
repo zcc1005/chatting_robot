@@ -168,3 +168,45 @@ def test_existing_summary_table_gets_publication_columns_and_draft_default(
         assert publication_status == "draft"
     finally:
         runtime.engine.dispose()
+
+
+def test_existing_project_reports_get_review_audit_columns(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "old-project-report-schema.db"
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE project_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                msgid VARCHAR(255) NOT NULL,
+                extraction_status VARCHAR(32) NOT NULL,
+                extraction_source VARCHAR(32) NOT NULL,
+                missing_fields TEXT NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    runtime = configure_database(sqlite_url(database_path))
+    try:
+        init_db(runtime)
+        columns = {
+            column["name"]
+            for column in inspect(runtime.engine).get_columns("project_reports")
+        }
+        assert {
+            "relevance_status",
+            "relevance_reason",
+            "relevance_confidence",
+            "date_source",
+            "normalization_warnings",
+        }.issubset(columns)
+    finally:
+        runtime.engine.dispose()

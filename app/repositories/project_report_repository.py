@@ -71,6 +71,11 @@ def start_extraction(session: Session, message: Message) -> ProjectReport:
         record.extraction_source = "llm"
         record.raw_extraction_json = None
         record.error_message = None
+        record.relevance_status = "not_reviewed"
+        record.relevance_reason = None
+        record.relevance_confidence = None
+        record.date_source = "missing"
+        record.normalization_warnings = "[]"
         record.updated_at = now
     session.commit()
     return get_by_message_id(session, message.id) or record
@@ -81,6 +86,9 @@ def save_success(
     record: ProjectReport,
     payload: ReportExtractionPayload,
     raw_response: str,
+    *,
+    date_source: str = "llm",
+    normalization_warnings: list[str] | None = None,
 ) -> ProjectReport:
     record.project_name = payload.project_name
     record.report_date = payload.report_date
@@ -96,6 +104,13 @@ def save_success(
         payload.project_name, payload.report_date, payload.work_items
     )
     record.extraction_source = "llm"
+    record.relevance_status = payload.relevance_status
+    record.relevance_reason = payload.relevance_reason
+    record.relevance_confidence = payload.relevance_confidence
+    record.date_source = date_source
+    record.normalization_warnings = serialize_string_list(
+        normalization_warnings or []
+    )
     record.raw_extraction_json = raw_response
     record.error_message = None
     record.updated_at = datetime.now(timezone.utc)
@@ -118,6 +133,11 @@ def save_failure(
     record.extraction_source = "llm"
     record.raw_extraction_json = raw_response
     record.error_message = error_message
+    record.relevance_status = "not_reviewed"
+    record.relevance_reason = None
+    record.relevance_confidence = None
+    record.date_source = "missing"
+    record.normalization_warnings = "[]"
     record.updated_at = datetime.now(timezone.utc)
     session.commit()
     return get_by_message_id(session, record.message_id) or record
@@ -154,6 +174,16 @@ def apply_manual_patch(
         record.work_items or None,
     )
     record.extraction_source = "manual"
+    if "report_date" in patch.model_fields_set:
+        record.date_source = "manual" if record.report_date else "missing"
+    if record.extraction_status == "completed" and record.relevance_status in {
+        "not_reviewed",
+        "ordinary_chat",
+        "uncertain",
+    }:
+        record.relevance_status = "report"
+        record.relevance_reason = "人工修正后具备项目、日期和施工内容"
+        record.relevance_confidence = None
     record.error_message = None
     record.updated_at = datetime.now(timezone.utc)
     session.commit()
@@ -196,6 +226,22 @@ def serialize_missing_fields(fields: list[str]) -> str:
 
 
 def deserialize_missing_fields(value: str) -> list[str]:
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, str) for item in parsed
+    ):
+        return []
+    return parsed
+
+
+def serialize_string_list(values: list[str]) -> str:
+    return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+
+
+def deserialize_string_list(value: str) -> list[str]:
     try:
         parsed = json.loads(value)
     except (json.JSONDecodeError, TypeError):

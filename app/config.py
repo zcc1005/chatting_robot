@@ -67,6 +67,14 @@ class Settings:
     llm_base_url: str = ""
     llm_timeout_seconds: float = 90.0
     llm_max_retries: int = 1
+    vision_api_key: str = ""
+    vision_model: str = ""
+    vision_base_url: str = ""
+    vision_timeout_seconds: float = 90.0
+    vision_max_retries: int = 1
+    image_download_timeout_seconds: float = 15.0
+    image_max_bytes: int = 10_000_000
+    enable_auto_image_recognition: bool = False
     enable_real_response_send: bool = False
     response_send_timeout_seconds: float = 10.0
 
@@ -93,6 +101,24 @@ class Settings:
             llm_base_url=os.getenv("LLM_BASE_URL", ""),
             llm_timeout_seconds=_read_float("LLM_TIMEOUT_SECONDS", 90.0),
             llm_max_retries=_read_int("LLM_MAX_RETRIES", 1),
+            vision_api_key=os.getenv(
+                "VISION_API_KEY", os.getenv("LLM_API_KEY", "")
+            ),
+            vision_model=os.getenv("VISION_MODEL", ""),
+            vision_base_url=os.getenv(
+                "VISION_BASE_URL", os.getenv("LLM_BASE_URL", "")
+            ),
+            vision_timeout_seconds=_read_float(
+                "VISION_TIMEOUT_SECONDS", 90.0
+            ),
+            vision_max_retries=_read_int("VISION_MAX_RETRIES", 1),
+            image_download_timeout_seconds=_read_float(
+                "IMAGE_DOWNLOAD_TIMEOUT_SECONDS", 15.0
+            ),
+            image_max_bytes=_read_int("IMAGE_MAX_BYTES", 10_000_000),
+            enable_auto_image_recognition=_read_bool(
+                "ENABLE_AUTO_IMAGE_RECOGNITION", False
+            ),
             enable_real_response_send=_read_bool(
                 "ENABLE_REAL_RESPONSE_SEND", False
             ),
@@ -114,6 +140,17 @@ class Settings:
             for value in (self.llm_api_key, self.llm_model, self.llm_base_url)
         )
 
+    @property
+    def vision_configured(self) -> bool:
+        return all(
+            value.strip()
+            for value in (
+                self.vision_api_key,
+                self.vision_model,
+                self.vision_base_url,
+            )
+        )
+
     def validate(self) -> None:
         if not self.app_env.strip():
             raise ConfigurationError("APP_ENV 不能为空")
@@ -125,6 +162,16 @@ class Settings:
             raise ConfigurationError("LLM_TIMEOUT_SECONDS 必须大于 0")
         if not 0 <= self.llm_max_retries <= 3:
             raise ConfigurationError("LLM_MAX_RETRIES 必须在 0 到 3 之间")
+        if self.vision_timeout_seconds <= 0:
+            raise ConfigurationError("VISION_TIMEOUT_SECONDS 必须大于 0")
+        if not 0 <= self.vision_max_retries <= 3:
+            raise ConfigurationError("VISION_MAX_RETRIES 必须在 0 到 3 之间")
+        if self.image_download_timeout_seconds <= 0:
+            raise ConfigurationError(
+                "IMAGE_DOWNLOAD_TIMEOUT_SECONDS 必须大于 0"
+            )
+        if not 1 <= self.image_max_bytes <= 50_000_000:
+            raise ConfigurationError("IMAGE_MAX_BYTES 必须在 1 到 50000000 之间")
         if self.response_send_timeout_seconds <= 0:
             raise ConfigurationError(
                 "RESPONSE_SEND_TIMEOUT_SECONDS 必须大于 0"

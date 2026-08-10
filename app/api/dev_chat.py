@@ -14,7 +14,7 @@ SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "Content-Security-Policy": (
         "default-src 'self'; script-src 'self'; style-src 'self'; "
-        "connect-src 'self'; img-src 'self' data:; object-src 'none'; "
+        "connect-src 'self'; img-src 'self' data: https:; object-src 'none'; "
         "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     ),
     "Referrer-Policy": "no-referrer",

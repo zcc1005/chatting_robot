@@ -67,6 +67,33 @@ class DuplicateProject(BaseModel):
     reports: list[SummarySourceReport]
 
 
+class SummaryProjectImage(BaseModel):
+    attachment_id: int
+    image_msgid: str
+    source_url: str
+    project_name: str | None
+    captured_at: datetime | None
+    weather: str | None
+    location: str | None
+    construction_content: str | None
+    ocr_text: str | None
+    scene_description: str | None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    association_status: Literal["linked", "manual"]
+
+
+class SummaryImageReview(BaseModel):
+    attachment_id: int
+    image_msgid: str
+    recognition_status: Literal["pending", "completed", "failed"]
+    association_status: Literal[
+        "linked", "needs_review", "unmatched", "manual"
+    ] | None
+    candidate_project_report_id: int | None
+    candidate_project_name: str | None
+    reason: str
+
+
 class SummaryProjectDetail(BaseModel):
     project_report_id: int
     msgid: str
@@ -77,6 +104,7 @@ class SummaryProjectDetail(BaseModel):
     safety_status: str | None
     quality_status: str | None
     missing_fields: list[str]
+    images: list[SummaryProjectImage] = Field(default_factory=list)
 
 
 class DailyReportPreviewResponse(BaseModel):
@@ -93,6 +121,7 @@ class DailyReportPreviewResponse(BaseModel):
     review_reports: list[SummaryReviewReport]
     duplicate_projects: list[DuplicateProject]
     source_reports: list[SummarySourceReport]
+    image_reviews: list[SummaryImageReview] = Field(default_factory=list)
     generation_status: GenerationStatus
     warnings: list[str]
     markdown_content: str

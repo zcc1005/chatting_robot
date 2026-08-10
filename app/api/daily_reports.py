@@ -30,6 +30,7 @@ from app.repositories.daily_report_summary_repository import (
     deserialize_warnings,
     get_summary,
     list_send_attempts,
+    list_source_images,
     list_source_reports,
     list_summaries,
     save_summary_snapshot,
@@ -62,7 +63,8 @@ def preview_daily_report(
         chatid=request_data.chatid,
         report_date=request_data.report_date,
     )
-    return _build_preview(request_data, reports)
+    images = list_source_images(session, chatid=request_data.chatid)
+    return _build_preview(request_data, reports, images)
 
 
 @router.post("", response_model=DailyReportSummaryResponse)
@@ -75,7 +77,8 @@ def save_daily_report(
         chatid=request_data.chatid,
         report_date=request_data.report_date,
     )
-    preview = _build_preview(request_data, reports)
+    images = list_source_images(session, chatid=request_data.chatid)
+    preview = _build_preview(request_data, reports, images)
     try:
         record = save_summary_snapshot(session, preview, reports)
     except SQLAlchemyError:
@@ -211,12 +214,15 @@ def query_daily_report_send_attempts(
     )
 
 
-def _build_preview(request_data: DailyReportRequest, reports) -> DailyReportPreviewResponse:
+def _build_preview(
+    request_data: DailyReportRequest, reports, images
+) -> DailyReportPreviewResponse:
     try:
         return build_daily_report_preview(
             reports,
             chatid=request_data.chatid,
             report_date=request_data.report_date,
+            image_recognitions=images,
         )
     except DailyReportSummaryError as exc:
         logger.warning(

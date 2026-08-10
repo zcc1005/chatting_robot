@@ -160,6 +160,11 @@ def _to_list_item(record: Message) -> MessageListItem:
         received_at=record.received_at,
         process_status=record.process_status,
         attachment_count=len(record.attachments),
+        image_urls=[
+            item.remote_url
+            for item in record.attachments
+            if item.attachment_type == "image"
+        ],
     )
 
 

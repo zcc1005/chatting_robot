@@ -23,6 +23,7 @@ from app.repositories.message_repository import get_message_detail
 from app.repositories.project_report_repository import (
     apply_manual_patch,
     deserialize_missing_fields,
+    deserialize_string_list,
     get_by_msgid,
     list_reports,
 )
@@ -201,6 +202,13 @@ def _to_response(record: ProjectReport) -> ProjectReportResponse:
         confidence=record.confidence,
         extraction_status=record.extraction_status,
         extraction_source=record.extraction_source,
+        relevance_status=record.relevance_status,
+        relevance_reason=record.relevance_reason,
+        relevance_confidence=record.relevance_confidence,
+        date_source=record.date_source,
+        normalization_warnings=deserialize_string_list(
+            record.normalization_warnings
+        ),
         raw_extraction_json=record.raw_extraction_json,
         error_message=record.error_message,
         created_at=record.created_at,

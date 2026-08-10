@@ -21,16 +21,25 @@ class LLMClientTimeout(LLMClientError):
     """大模型调用超时。"""
 
 
-SYSTEM_PROMPT = """你只负责从一条施工日报原文中提取结构化 JSON。
+SYSTEM_PROMPT = """你负责先判断消息与施工日报的相关性，再提取结构化 JSON。
 不得猜测、补编或生成原文不存在的数据；缺失字段必须为 null，并列入 missing_fields。
 只返回一个 JSON 对象，不要 Markdown、解释、SQL 或其他文本。
 JSON 必须包含以下全部键：project_name, report_date, weather,
 management_count, worker_count, equipment, work_items, tomorrow_plan,
-safety_status, quality_status, missing_fields, confidence。
+safety_status, quality_status, missing_fields, confidence,
+relevance_status, relevance_reason, relevance_confidence。
+relevance_status 只能是 report、related_update、ordinary_chat、uncertain：
+- report：包含一份日报的项目、日期、人员、机械或多项施工内容等实质信息；
+- related_update：是施工进度或现场补充，但不是一份完整日报；
+- ordinary_chat：催问日报、会议通知、确认回复或其他普通聊天；
+- uncertain：证据冲突，无法可靠判断。
+relevance_reason 用一句简短中文说明依据，relevance_confidence 为 0 到 1。
 report_date 使用 YYYY-MM-DD；confidence 为 0 到 1 的数字。
+原文只有月日没有年份时 report_date 返回 null，年份由后端按消息时间补全。
 equipment 为 null 或对象数组，每项严格包含 name、count、unit。
 work_items 为 null 或对象数组，每项严格包含 location、content、progress，
-其中缺失的 location 或 progress 使用 null。"""
+其中 content 必须是原文明示的非空施工内容；无法确定 content 的片段不要加入数组，
+缺失的 location 或 progress 使用 null。"""
 
 
 class OpenAICompatibleExtractionClient:

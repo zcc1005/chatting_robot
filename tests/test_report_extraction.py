@@ -206,7 +206,17 @@ def test_other_missing_critical_fields_need_review(
     )
     mock_llm.responses = [json.dumps(extraction, ensure_ascii=False)]
     msgid = f"missing-{field_name}"
-    save_candidate(client, msgid)
+    if field_name == "report_date":
+        save_candidate(
+            client,
+            msgid,
+            content=(
+                "兴城桥梁项目施工日报，天气晴，管理人员8人，"
+                "施工人员117人，挖掘机2台，今日完成桩基浇筑。"
+            ),
+        )
+    else:
+        save_candidate(client, msgid)
     body = client.post(f"/api/messages/{msgid}/extract-report").json()
     assert body["extraction_status"] == "needs_review"
     assert field_name in body["missing_fields"]
@@ -296,6 +306,186 @@ def test_needs_review_message_is_allowed_to_extract(client_and_llm) -> None:
     extracted = client.post("/api/messages/review-allowed/extract-report")
     assert extracted.status_code == 200
     assert len(mock_llm.calls) == 1
+
+
+def test_month_day_only_uses_message_received_year_and_enters_summary(
+    client_and_llm,
+) -> None:
+    client, mock_llm = client_and_llm
+    extraction = full_extraction(
+        project_name="武清电商园项目",
+        report_date=None,
+        missing_fields=["report_date"],
+    )
+    mock_llm.responses = [json.dumps(extraction, ensure_ascii=False)]
+    payload = report_message(
+        "month-day-report",
+        "武清电商园项目8月10日施工情况，天气晴，施工人员106人，"
+        "塔吊3台，施工内容：酒店顶板吊装完成90%。",
+        chatid="month-day-group",
+    )
+    payload["received_at"] = "2026-08-10T01:00:00Z"
+    saved = client.post("/api/dev/mock-message", json=payload)
+    assert saved.json()["detection_status"] == "report_candidate"
+
+    extracted = client.post(
+        "/api/messages/month-day-report/extract-report"
+    ).json()
+    assert extracted["report_date"] == "2026-08-10"
+    assert extracted["date_source"] == "text_month_day_message_year"
+    assert "report_date" not in extracted["missing_fields"]
+    assert extracted["extraction_status"] == "completed"
+
+    preview = client.post(
+        "/api/daily-reports/preview",
+        json={"chatid": "month-day-group", "report_date": "2026-08-10"},
+    ).json()
+    assert preview["project_count"] == 1
+    assert preview["projects"][0]["project_name"] == "武清电商园项目"
+
+
+def test_obvious_report_question_is_filtered_locally_without_llm(
+    client_and_llm,
+) -> None:
+    client, mock_llm = client_and_llm
+    saved = client.post(
+        "/api/dev/mock-message",
+        json=report_message("report-question", "今天的施工日报呢"),
+    ).json()
+    assert saved["detection_status"] == "ignored"
+    assert "疑似询问或催要日报" in saved["matched_rules"]
+    assert mock_llm.calls == []
+
+
+def test_llm_can_demote_ambiguous_message_to_ordinary_chat(
+    client_and_llm,
+) -> None:
+    client, mock_llm = client_and_llm
+    extraction = {
+        field: None
+        for field in (
+            "project_name",
+            "report_date",
+            "weather",
+            "management_count",
+            "worker_count",
+            "equipment",
+            "work_items",
+            "tomorrow_plan",
+            "safety_status",
+            "quality_status",
+        )
+    }
+    extraction.update(
+        {
+            "missing_fields": [
+                "project_name",
+                "report_date",
+                "weather",
+                "management_count",
+                "worker_count",
+                "equipment",
+                "work_items",
+                "tomorrow_plan",
+                "safety_status",
+                "quality_status",
+            ],
+            "confidence": 0,
+            "relevance_status": "ordinary_chat",
+            "relevance_reason": "只是一般性描述，没有日报数据",
+            "relevance_confidence": 0.96,
+        }
+    )
+    mock_llm.responses = [json.dumps(extraction, ensure_ascii=False)]
+    saved = client.post(
+        "/api/dev/mock-message",
+        json=report_message("llm-ordinary", "桥梁施工进度正常"),
+    ).json()
+    assert saved["detection_status"] == "needs_review"
+
+    extracted = client.post(
+        "/api/messages/llm-ordinary/extract-report"
+    ).json()
+    assert extracted["relevance_status"] == "ordinary_chat"
+    assert extracted["relevance_confidence"] == 0.96
+    detail = client.get("/api/messages/llm-ordinary").json()
+    assert detail["report_detection"]["detection_status"] == "ignored"
+    assert "大模型相关性复核为普通聊天" in detail["report_detection"]["reason"]
+
+
+def test_llm_related_update_remains_reviewable(client_and_llm) -> None:
+    client, mock_llm = client_and_llm
+    extraction = full_extraction(
+        project_name=None,
+        report_date=None,
+        weather=None,
+        management_count=None,
+        worker_count=None,
+        equipment=None,
+        work_items=[
+            {
+                "location": "桥梁",
+                "content": "施工进度正常",
+                "progress": None,
+            }
+        ],
+        tomorrow_plan=None,
+        safety_status=None,
+        quality_status=None,
+        missing_fields=[
+            "project_name",
+            "report_date",
+            "weather",
+            "management_count",
+            "worker_count",
+            "equipment",
+            "tomorrow_plan",
+            "safety_status",
+            "quality_status",
+        ],
+        relevance_status="related_update",
+        relevance_reason="包含施工进度补充但不是完整日报",
+        relevance_confidence=0.9,
+    )
+    mock_llm.responses = [json.dumps(extraction, ensure_ascii=False)]
+    client.post(
+        "/api/dev/mock-message",
+        json=report_message("related-update", "桥梁施工进度正常"),
+    )
+    body = client.post(
+        "/api/messages/related-update/extract-report"
+    ).json()
+    assert body["relevance_status"] == "related_update"
+    assert body["extraction_status"] == "needs_review"
+    detail = client.get("/api/messages/related-update").json()
+    assert detail["report_detection"]["detection_status"] == "needs_review"
+
+
+def test_missing_content_in_one_work_item_does_not_fail_whole_report(
+    client_and_llm,
+) -> None:
+    client, mock_llm = client_and_llm
+    extraction = full_extraction(
+        project_name="伊拉克米桑医院项目",
+        report_date="2026-08-04",
+        work_items=[
+            {"location": "4区", "content": "混凝土养护", "progress": None},
+            {"location": "新办公区", "content": None, "progress": None},
+        ],
+    )
+    mock_llm.responses = [json.dumps(extraction, ensure_ascii=False)]
+    save_candidate(client, "partial-invalid-work-item")
+    response = client.post(
+        "/api/messages/partial-invalid-work-item/extract-report"
+    )
+    body = response.json()
+    assert response.status_code == 200
+    assert body["extraction_status"] == "completed"
+    assert body["work_items"] == [
+        {"location": "4区", "content": "混凝土养护", "progress": None}
+    ]
+    assert len(body["normalization_warnings"]) == 1
+    assert "1 项施工子项" in body["normalization_warnings"][0]
 
 
 def test_invalid_json_is_saved_as_failed(client_and_llm) -> None:

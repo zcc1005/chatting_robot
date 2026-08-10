@@ -132,6 +132,18 @@ class MessageAttachment(Base):
     )
 
     message: Mapped[Message] = relationship(back_populates="attachments")
+    image_recognition: Mapped["MessageImageRecognition | None"] = relationship(
+        back_populates="attachment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+    project_report_image: Mapped["ProjectReportImage | None"] = relationship(
+        back_populates="attachment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
 
 
 class MessageReportDetection(Base):
@@ -203,6 +215,17 @@ class ProjectReport(Base):
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     extraction_status: Mapped[str] = mapped_column(String(32), nullable=False)
     extraction_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    relevance_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="not_reviewed"
+    )
+    relevance_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    relevance_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    date_source: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="missing"
+    )
+    normalization_warnings: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
     raw_extraction_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -227,6 +250,10 @@ class ProjectReport(Base):
     )
     summary_items: Mapped[list["DailyReportSummaryItem"]] = relationship(
         back_populates="project_report"
+    )
+    images: Mapped[list["ProjectReportImage"]] = relationship(
+        back_populates="project_report",
+        order_by="ProjectReportImage.id",
     )
 
 
@@ -260,6 +287,118 @@ class ReportWorkItem(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     project_report: Mapped[ProjectReport] = relationship(back_populates="work_items")
+
+
+class MessageImageRecognition(Base):
+    __tablename__ = "message_image_recognitions"
+    __table_args__ = (
+        UniqueConstraint(
+            "attachment_id", name="uq_image_recognitions_attachment_id"
+        ),
+        CheckConstraint(
+            "recognition_status IN ('pending', 'completed', 'failed')",
+            name="ck_image_recognitions_status",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_image_recognitions_confidence",
+        ),
+        Index("ix_image_recognitions_status", "recognition_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    attachment_id: Mapped[int] = mapped_column(
+        ForeignKey("message_attachments.id", ondelete="CASCADE"), nullable=False
+    )
+    recognition_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    report_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    captured_at: Mapped[datetime | None] = mapped_column(
+        AwareDateTime(), nullable=True
+    )
+    weather: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    location: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    construction_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scene_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    image_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    raw_recognition_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recognizer_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    attachment: Mapped[MessageAttachment] = relationship(
+        back_populates="image_recognition"
+    )
+    association: Mapped["ProjectReportImage | None"] = relationship(
+        back_populates="recognition",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+
+
+class ProjectReportImage(Base):
+    __tablename__ = "project_report_images"
+    __table_args__ = (
+        UniqueConstraint(
+            "attachment_id", name="uq_project_report_images_attachment_id"
+        ),
+        UniqueConstraint(
+            "recognition_id", name="uq_project_report_images_recognition_id"
+        ),
+        CheckConstraint(
+            "association_status IN "
+            "('linked', 'needs_review', 'unmatched', 'manual')",
+            name="ck_project_report_images_status",
+        ),
+        CheckConstraint(
+            "score >= 0", name="ck_project_report_images_score_nonnegative"
+        ),
+        Index("ix_project_report_images_report_id", "project_report_id"),
+        Index("ix_project_report_images_status", "association_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    attachment_id: Mapped[int] = mapped_column(
+        ForeignKey("message_attachments.id", ondelete="CASCADE"), nullable=False
+    )
+    recognition_id: Mapped[int] = mapped_column(
+        ForeignKey("message_image_recognitions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_report_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_reports.id", ondelete="SET NULL"), nullable=True
+    )
+    association_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    matched_rules: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    candidate_scores_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[]"
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    attachment: Mapped[MessageAttachment] = relationship(
+        back_populates="project_report_image"
+    )
+    recognition: Mapped[MessageImageRecognition] = relationship(
+        back_populates="association"
+    )
+    project_report: Mapped[ProjectReport | None] = relationship(
+        back_populates="images"
+    )
 
 
 class DailyReportSummary(Base):

@@ -16,7 +16,7 @@ from app.repositories.report_detection_repository import upsert_detection
 DetectionStatus = Literal[
     "report_candidate", "needs_review", "ignored", "not_applicable"
 ]
-DETECTOR_VERSION = "rules-v2"
+DETECTOR_VERSION = "rules-v3"
 
 _DATE_PATTERN = re.compile(
     r"(?:\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日)"
@@ -42,6 +42,13 @@ _WEATHER_PATTERN = re.compile(
 )
 _CONSTRUCTION_CONTENT_TERMS = ("今日完成", "今日施工", "施工内容", "施工进度")
 _ENGINEERING_TERMS = ("项目", "标段", "工区", "楼栋", "隧道", "桥梁")
+_REPORT_QUERY_PATTERN = re.compile(
+    r"(?:施工日报|项目日报|日报).{0,8}(?:呢|吗|发了没|发了吗|有吗|在哪|哪里|"
+    r"出来了吗|什么时候发|怎么还没发)\s*[？?。！!]*$"
+)
+_MOCK_REPORT_COMMAND_PATTERN = re.compile(
+    r"(?:生成|汇总|发送|查看).{0,18}(?:施工日报|项目日报|日报)\s*[。！!]*$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +109,18 @@ def evaluate_report_text(msgtype: str, text_content: str | None) -> DetectionEva
         score += 1
         matched_rules.append("正文长度不少于30个字符")
 
+    is_report_query = len(text) <= 30 and _REPORT_QUERY_PATTERN.search(text)
+    if is_report_query:
+        score -= 4
+        matched_rules.append("疑似询问或催要日报")
+
+    is_report_command = (
+        len(text) <= 50 and _MOCK_REPORT_COMMAND_PATTERN.search(text)
+    )
+    if is_report_command:
+        score -= 4
+        matched_rules.append("识别为日报生成命令")
+
     if score >= 5:
         detection_status: DetectionStatus = "report_candidate"
         reason = "命中多项施工日报特征"
@@ -110,7 +129,12 @@ def evaluate_report_text(msgtype: str, text_content: str | None) -> DetectionEva
         reason = "命中部分施工日报特征，建议先进行大模型结构化复核"
     else:
         detection_status = "ignored"
-        reason = "未命中足够的施工日报特征"
+        if is_report_command:
+            reason = "识别为日报生成命令，不作为项目日报正文"
+        elif is_report_query:
+            reason = "疑似询问或催要日报，不作为日报正文"
+        else:
+            reason = "未命中足够的施工日报特征"
 
     return DetectionEvaluation(
         detection_status=detection_status,

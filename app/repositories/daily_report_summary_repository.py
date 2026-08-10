@@ -13,7 +13,10 @@ from app.models.database_models import (
     DailyReportSummaryItem,
     DailyReportSendAttempt,
     Message,
+    MessageAttachment,
+    MessageImageRecognition,
     ProjectReport,
+    ProjectReportImage,
 )
 from app.models.daily_report_schemas import DailyReportPreviewResponse
 
@@ -28,9 +31,35 @@ def list_source_reports(
             joinedload(ProjectReport.message),
             selectinload(ProjectReport.equipment),
             selectinload(ProjectReport.work_items),
+            selectinload(ProjectReport.images)
+            .joinedload(ProjectReportImage.recognition),
+            selectinload(ProjectReport.images)
+            .joinedload(ProjectReportImage.attachment)
+            .joinedload(MessageAttachment.message),
         )
         .where(Message.chatid == chatid, ProjectReport.report_date == report_date)
         .order_by(ProjectReport.id.asc())
+    )
+    return list(session.scalars(statement).all())
+
+
+def list_source_images(
+    session: Session, *, chatid: str
+) -> list[MessageImageRecognition]:
+    statement = (
+        select(MessageImageRecognition)
+        .join(MessageImageRecognition.attachment)
+        .join(MessageAttachment.message)
+        .options(
+            joinedload(MessageImageRecognition.attachment).joinedload(
+                MessageAttachment.message
+            ),
+            joinedload(MessageImageRecognition.association).joinedload(
+                ProjectReportImage.project_report
+            ),
+        )
+        .where(Message.chatid == chatid)
+        .order_by(MessageImageRecognition.id.asc())
     )
     return list(session.scalars(statement).all())
 

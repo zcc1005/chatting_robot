@@ -88,6 +88,22 @@ def test_page_calls_existing_mock_message_api(dev_chat_client) -> None:
     assert "response_url" not in script.text.lower()
 
 
+def test_page_can_upload_and_recognize_construction_images(dev_chat_client) -> None:
+    html = dev_chat_client.get("/dev/chat").text
+    script = dev_chat_client.get("/dev/chat.js").text
+    styles = dev_chat_client.get("/dev/chat.css").text
+
+    assert 'id="image-input"' in html
+    assert 'id="image-button"' in html
+    assert 'data-mock-image-endpoint="/api/dev/mock-image-message"' in html
+    assert 'data-image-recognitions-endpoint="/api/image-recognitions"' in html
+    assert "function sendImage" in script
+    assert "recognize-images" in script
+    assert "image_base64: \"[图片数据已隐藏]\"" in script
+    assert "function renderImageRecognition" in script
+    assert ".message-image" in styles
+
+
 def test_page_assets_do_not_contain_hardcoded_secrets(dev_chat_client) -> None:
     assets = "\n".join(
         [
@@ -169,6 +185,29 @@ def test_candidate_is_llm_extracted_before_preview(dev_chat_client) -> None:
     assert "if (!extractionReady) return" in script
     assert 'extraction_status === "failed"' in script
     assert "网络请求失败" in script
+
+
+def test_mock_chat_report_command_runs_automatic_local_loop(
+    dev_chat_client,
+) -> None:
+    html = dev_chat_client.get("/dev/chat").text
+    script = dev_chat_client.get("/dev/chat.js").text
+
+    assert "生成8月10日施工日报" in html
+    assert "function parseMockReportCommand" in script
+    assert "function runMockReportCommand" in script
+    assert "function mockCommandHasBlockers" in script
+    assert "await runMockReportCommand(command)" in script
+    assert "await extractPendingReportsBeforePreview()" in script
+    assert "`${endpoints.summaries}/preview`" in script
+    assert '"命令保存汇总快照"' in script
+    assert "`${endpoints.summaries}/${saved.id}/confirm`" in script
+    assert '"命令创建Mock触发消息"' in script
+    assert "`${endpoints.summaries}/${saved.id}/send`" in script
+    assert "Number(preview.project_count || 0) < 1" in script
+    assert "preview.duplicate_projects" in script
+    assert 'item.extraction_status !== "completed"' in script
+    assert "仅本地 Mock" in script
 
 
 def test_preview_is_sent_as_local_robot_chat_message(dev_chat_client) -> None:

@@ -4,19 +4,26 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date
+from zoneinfo import ZoneInfo
+from urllib.parse import urlsplit
 
-from app.models.database_models import ProjectReport
+from app.models.database_models import MessageImageRecognition, ProjectReport
 from app.models.daily_report_schemas import (
     DailyReportPreviewResponse,
     DuplicateProject,
     SummaryEquipment,
     SummaryMissingData,
+    SummaryImageReview,
+    SummaryProjectImage,
     SummaryProjectDetail,
     SummaryReviewReport,
     SummarySourceReport,
 )
 from app.models.report_schemas import EXTRACTED_FIELD_NAMES, ExtractedWorkItem
-from app.repositories.project_report_repository import deserialize_missing_fields
+from app.repositories.project_report_repository import (
+    deserialize_missing_fields,
+    deserialize_string_list,
+)
 
 
 class DailyReportSummaryError(ValueError):
@@ -48,6 +55,7 @@ def build_daily_report_preview(
     *,
     chatid: str,
     report_date: date,
+    image_recognitions: list[MessageImageRecognition] | None = None,
 ) -> DailyReportPreviewResponse:
     _validate_nonnegative_quantities(reports)
 
@@ -71,6 +79,9 @@ def build_daily_report_preview(
             warnings.append(
                 f"{_report_name(report)}{reason}，未进入数值汇总"
             )
+        for warning in deserialize_string_list(report.normalization_warnings):
+            review_reasons[report.id].append(f"规范化提醒：{warning}")
+            warnings.append(f"{_report_name(report)}规范化提醒：{warning}")
 
     duplicate_projects: list[DuplicateProject] = []
     for group in duplicate_groups:
@@ -104,6 +115,59 @@ def build_daily_report_preview(
         included_reports.append(report)
 
     included_ids = {report.id for report in included_reports}
+    relevant_images = _relevant_images(
+        image_recognitions or [],
+        report_date=report_date,
+        report_ids={report.id for report in reports},
+    )
+    linked_images: dict[int, list[SummaryProjectImage]] = defaultdict(list)
+    image_reviews: list[SummaryImageReview] = []
+    for recognition in relevant_images:
+        association = recognition.association
+        if (
+            recognition.recognition_status == "completed"
+            and association is not None
+            and association.association_status in {"linked", "manual"}
+            and association.project_report_id in included_ids
+        ):
+            linked_images[association.project_report_id].append(
+                _summary_project_image(recognition)
+            )
+            continue
+
+        candidate = association.project_report if association is not None else None
+        if recognition.recognition_status == "failed":
+            reason = recognition.error_message or "图片识别失败"
+        elif association is None:
+            reason = "图片尚未执行项目关联"
+        elif association.project_report_id not in included_ids and (
+            association.association_status in {"linked", "manual"}
+        ):
+            reason = "图片所属项目未纳入本次汇总"
+        else:
+            reason = association.reason
+        image_reviews.append(
+            SummaryImageReview(
+                attachment_id=recognition.attachment_id,
+                image_msgid=recognition.attachment.message.msgid,
+                recognition_status=recognition.recognition_status,
+                association_status=(
+                    association.association_status
+                    if association is not None
+                    else None
+                ),
+                candidate_project_report_id=(
+                    association.project_report_id
+                    if association is not None
+                    else None
+                ),
+                candidate_project_name=(
+                    candidate.project_name if candidate is not None else None
+                ),
+                reason=reason,
+            )
+        )
+        warnings.append(f"群聊图片待确认：{reason}")
     missing_data: list[SummaryMissingData] = []
     for report in reports:
         fields = _actual_missing_fields(report)
@@ -168,6 +232,7 @@ def build_daily_report_preview(
             safety_status=report.safety_status,
             quality_status=report.quality_status,
             missing_fields=_actual_missing_fields(report),
+            images=linked_images.get(report.id, []),
         )
         for report in included_reports
     ]
@@ -212,6 +277,7 @@ def build_daily_report_preview(
         duplicate_projects=duplicate_projects,
         missing_data=missing_data,
         warnings=warnings,
+        image_reviews=image_reviews,
     )
     return DailyReportPreviewResponse(
         chatid=chatid,
@@ -227,6 +293,7 @@ def build_daily_report_preview(
         review_reports=review_reports,
         duplicate_projects=duplicate_projects,
         source_reports=source_reports,
+        image_reviews=image_reviews,
         generation_status=generation_status,
         warnings=warnings,
         markdown_content=markdown_content,
@@ -250,6 +317,7 @@ def render_markdown(
     duplicate_projects: list[DuplicateProject],
     missing_data: list[SummaryMissingData],
     warnings: list[str],
+    image_reviews: list[SummaryImageReview],
 ) -> str:
     lines = [
         f"# {report_date.isoformat()} 施工日报汇总预览",
@@ -297,6 +365,38 @@ def render_markdown(
                 lines.append(
                     f"  - {location}：{_one_line(item.content)}{progress}"
                 )
+            if project.images:
+                lines.append("- 现场图片与识别补充：")
+                for image_index, project_image in enumerate(
+                    project.images, start=1
+                ):
+                    lines.append(
+                        f"  - ![{_one_line(project.project_name)}现场图"
+                        f"{image_index}](<{_markdown_url(project_image.source_url)}>)"
+                    )
+                    supplement = project_image.construction_content or (
+                        project_image.scene_description
+                    )
+                    if supplement:
+                        lines.append(
+                            "    - 识别补充："
+                            f"{_limited_one_line(supplement, 500)}"
+                        )
+                    if project_image.location:
+                        lines.append(
+                            "    - 图片地点："
+                            f"{_limited_one_line(project_image.location, 200)}"
+                        )
+                    if project_image.captured_at:
+                        lines.append(
+                            "    - 拍摄时间："
+                            f"{project_image.captured_at.isoformat()}"
+                        )
+                    if project_image.ocr_text:
+                        lines.append(
+                            "    - 图片文字："
+                            f"{_limited_one_line(project_image.ocr_text, 500)}"
+                        )
             lines.append("")
     else:
         lines.extend(["- 暂无可展示的有效项目施工内容", ""])
@@ -340,6 +440,12 @@ def render_markdown(
             f"- {_summary_item_name(item.project_name, item.msgid)}："
             f"{_one_line(item.review_reason)}"
             for item in review_reports
+        )
+    if image_reviews:
+        lines.extend(["", "### 待人工确认图片", ""])
+        lines.extend(
+            f"- 图片消息 {item.image_msgid}：{_one_line(item.reason)}"
+            for item in image_reviews
         )
     return "\n".join(lines).rstrip() + "\n"
 
@@ -423,3 +529,75 @@ def _optional_text(value: str | None) -> str:
 
 def _one_line(value: str) -> str:
     return " ".join(value.replace("\r", "\n").splitlines()).strip()
+
+
+def _relevant_images(
+    recognitions: list[MessageImageRecognition],
+    *,
+    report_date: date,
+    report_ids: set[int],
+) -> list[MessageImageRecognition]:
+    timezone = ZoneInfo("Asia/Shanghai")
+    result: list[MessageImageRecognition] = []
+    for recognition in recognitions:
+        association = recognition.association
+        if association is not None and association.project_report_id in report_ids:
+            result.append(recognition)
+            continue
+        image_date = recognition.report_date or recognition.attachment.message.received_at.astimezone(
+            timezone
+        ).date()
+        if image_date == report_date:
+            result.append(recognition)
+    return result
+
+
+def _summary_project_image(
+    recognition: MessageImageRecognition,
+) -> SummaryProjectImage:
+    association = recognition.association
+    if association is None or association.association_status not in {
+        "linked",
+        "manual",
+    }:
+        raise DailyReportSummaryError("图片关联状态不允许进入项目汇总")
+    return SummaryProjectImage(
+        attachment_id=recognition.attachment_id,
+        image_msgid=recognition.attachment.message.msgid,
+        source_url=recognition.attachment.remote_url,
+        project_name=recognition.project_name,
+        captured_at=recognition.captured_at,
+        weather=recognition.weather,
+        location=recognition.location,
+        construction_content=recognition.construction_content,
+        ocr_text=recognition.ocr_text,
+        scene_description=recognition.scene_description,
+        confidence=recognition.confidence,
+        association_status=association.association_status,
+    )
+
+
+def _limited_one_line(value: str, limit: int) -> str:
+    normalized = _one_line(value)
+    return normalized if len(normalized) <= limit else normalized[:limit] + "…"
+
+
+def _markdown_url(value: str) -> str:
+    stripped = value.strip()
+    try:
+        parsed = urlsplit(stripped)
+    except ValueError:
+        return ""
+    if not (
+        (parsed.scheme == "https" and parsed.hostname)
+        or stripped.startswith("/api/dev/images/")
+    ):
+        return ""
+    return (
+        stripped
+        .replace("<", "%3C")
+        .replace(">", "%3E")
+        .replace(" ", "%20")
+        .replace("(", "%28")
+        .replace(")", "%29")
+    )

@@ -78,6 +78,37 @@ class MockTriggerMessageResponse(BaseModel):
     summary_id: int
 
 
+class MockImageMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chatid: str = Field(min_length=1, max_length=255)
+    sender_userid: str = Field(min_length=1, max_length=255)
+    sender_name: str | None = Field(default=None, max_length=255)
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: Literal["image/png", "image/jpeg", "image/webp"]
+    image_base64: str = Field(min_length=1, max_length=70_000_000)
+    received_at: datetime | None = None
+
+    @field_validator("chatid", "sender_userid")
+    @classmethod
+    def identifier_cannot_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("标识字段不能为空")
+        return stripped
+
+    @field_validator("received_at")
+    @classmethod
+    def optional_time_must_be_aware(
+        cls, value: datetime | None
+    ) -> datetime | None:
+        if value is not None and (
+            value.tzinfo is None or value.utcoffset() is None
+        ):
+            raise ValueError("received_at 必须包含时区")
+        return value
+
+
 class ReportDetectionResponse(BaseModel):
     msgid: str
     detection_status: DetectionStatus
@@ -121,6 +152,7 @@ class MessageListItem(BaseModel):
     received_at: datetime
     process_status: str
     attachment_count: int
+    image_urls: list[str] = Field(default_factory=list)
 
 
 class MessageListResponse(BaseModel):
