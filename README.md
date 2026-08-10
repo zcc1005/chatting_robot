@@ -49,6 +49,68 @@ DATABASE_URL=sqlite:///./data/jjt_bot.db
 
 交建通智能机器人场景的 `JJT_RECEIVE_ID` 保持空字符串。使用企业微信自建应用测试时，将它设置为企业的 CorpID，例如 `ww1234567890abcdef`。仅当 `ENABLE_JJT_CALLBACK=true` 时，程序才要求 Token 非空并校验 43 位 EncodingAESKey；离线模式可在没有真实平台密钥时启动。真实 Token 和 EncodingAESKey 只能放在已被 Git 忽略的 `.env` 中。
 
+## Docker 镜像与阿里云部署
+
+项目提供 `Dockerfile`、`compose.yaml`、完整的 `.env.docker.example` 配置模板，以及 Windows 一键构建推送脚本。镜像以非 root 用户运行，监听 8000 端口，并内置 `/health` 健康检查。SQLite 数据库、消息记录和下载图片统一保存在 `/app/data` 数据卷中，容器升级后不会丢失。
+
+> 仓库为公开仓库时，绝对不要把 `.env`、API Key、回调 Token、EncodingAESKey 或现有数据库复制进镜像。镜像层能被任何拉取者检查；配置应通过 Compose 的 `env_file` 在启动时注入。
+
+### 1. 准备生产配置
+
+```powershell
+Copy-Item .env.docker.example .env.docker
+```
+
+编辑 `.env.docker`，至少填写 `JJT_CALLBACK_TOKEN` 和 `JJT_ENCODING_AES_KEY`。如果需要日报大模型或图片识别，再填写对应的 `LLM_*`、`VISION_*` 配置。`.env.docker` 已加入 Git 和 Docker 忽略规则，不会进入源码仓库或镜像。
+
+### 2. 本地构建并推送阿里云
+
+先安装并启动 Docker Desktop，然后登录阿里云镜像仓库。密码应在 Docker 的交互提示中输入，不要写入脚本：
+
+```powershell
+docker login --username=alyzcc crpi-5zyp5pdzn7yrv5oo.cn-beijing.personal.cr.aliyuncs.com
+```
+
+构建并推送版本 `0.2.0`，同时更新 `latest`：
+
+```powershell
+.\scripts\build-and-push.ps1 -Tag 0.2.0 -AlsoLatest
+```
+
+脚本默认构建常见的 `linux/amd64` 镜像；如果阿里云服务器是 ARM 实例，改用 `-Platform linux/arm64`。
+
+脚本推送到：
+
+```text
+crpi-5zyp5pdzn7yrv5oo.cn-beijing.personal.cr.aliyuncs.com/zcc_0811/chat_robot:0.2.0
+```
+
+### 3. 在服务器启动
+
+将 `compose.yaml` 和填写好的 `.env.docker` 放在服务器同一目录。登录仓库后执行：
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose ps
+curl http://127.0.0.1:8000/health
+```
+
+如需换端口，可在命令前设置 `HOST_PORT`；如需部署其他标签，可设置 `IMAGE_TAG`。例如 Linux Shell：
+
+```bash
+HOST_PORT=8080 IMAGE_TAG=0.2.0 docker compose up -d
+```
+
+查看日志和停止服务：
+
+```bash
+docker compose logs -f --tail=200
+docker compose down
+```
+
+`docker compose down` 不会删除命名数据卷。不要使用 `docker compose down -v`，否则会删除 SQLite 数据库和消息文件。升级时先备份 `chat-robot-data` 数据卷，再拉取新标签并重建容器。
+
 ## 启动与检查
 
 使用启动脚本：
