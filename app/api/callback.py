@@ -42,7 +42,7 @@ from app.services.xml_service import (
 )
 
 
-router = APIRouter(prefix="/api/jjt", tags=["交建通/企业微信回调"])
+router = APIRouter(prefix="/jjt-robot", tags=["交建通/企业微信回调"])
 logger = logging.getLogger(__name__)
 
 CallbackFormat = Literal["json", "xml"]

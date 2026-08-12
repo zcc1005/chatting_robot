@@ -139,7 +139,7 @@ ENABLE_JJT_CALLBACK=false
 DATABASE_URL=sqlite:///./data/jjt_bot.db
 ```
 
-此模式不会注册 `/api/jjt/callback`，因此不需要真实交建通 Token 或 EncodingAESKey。启动命令：
+此模式不会注册 `/jjt-robot/callback`，因此不需要真实交建通 Token 或 EncodingAESKey。启动命令：
 
 ```powershell
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
@@ -177,7 +177,7 @@ ENABLE_JJT_CALLBACK=true
 交建通后台应填写可从公网访问的 HTTPS 地址：
 
 ```text
-https://你的公网HTTPS域名/api/jjt/callback
+https://你的公网HTTPS域名/jjt-robot/callback
 ```
 
 同一个地址同时处理 GET URL 验证和 POST 消息回调。GET 验证会在完成签名校验和解密后直接返回原始明文，不带 JSON 引号、BOM、额外换行或 HTML。部署时应保证此请求在 1 秒内返回。
@@ -596,7 +596,7 @@ Content-Type: application/json
 
 在企业微信管理后台创建自建应用并配置“接收消息”时：
 
-1. URL 填写 `https://你的公网HTTPS域名/api/jjt/callback`；
+1. URL 填写 `https://你的公网HTTPS域名/jjt-robot/callback`；
 2. 将后台的 Token 填入 `.env` 的 `JJT_CALLBACK_TOKEN`；
 3. 将后台的 EncodingAESKey 填入 `JJT_ENCODING_AES_KEY`；
 4. 将企业 CorpID 填入 `JJT_RECEIVE_ID`；
@@ -720,11 +720,11 @@ Invoke-RestMethod https://随机名称.trycloudflare.com/health
 
 进入“应用管理 → 自建应用 → 你的应用 → 接收消息/API 接收消息”，填写：
 
-- URL：`https://随机名称.trycloudflare.com/api/jjt/callback`
+- URL：`https://随机名称.trycloudflare.com/jjt-robot/callback`
 - Token：与 `.env` 的 `JJT_CALLBACK_TOKEN` 完全相同
 - EncodingAESKey：与 `.env` 的 `JJT_ENCODING_AES_KEY` 完全相同
 
-点击保存时，企业微信会立即发送 GET 验证。成功时本地服务日志会出现 `callback URL verified`。URL 末尾必须是 `/api/jjt/callback`，不能填写 `/health` 或 `/docs`。
+点击保存时，企业微信会立即发送 GET 验证。成功时本地服务日志会出现 `callback URL verified`。URL 末尾必须是 `/jjt-robot/callback`，不能填写 `/health` 或 `/docs`。
 
 ### 第七步：发送真实企业微信消息
 

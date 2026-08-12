@@ -127,7 +127,7 @@ def test_health_returns_200(client_and_dir) -> None:
 
 def test_openapi_documents_json_and_xml_callback_bodies(client_and_dir) -> None:
     client, _ = client_and_dir
-    operation = client.get("/openapi.json").json()["paths"]["/api/jjt/callback"][
+    operation = client.get("/openapi.json").json()["paths"]["/jjt-robot/callback"][
         "post"
     ]
     content_types = operation["requestBody"]["content"]
@@ -141,7 +141,7 @@ def test_get_callback_returns_plaintext_without_newline(client_and_dir) -> None:
     plaintext = "callback-ok"
     echostr = encrypt_for_test(plaintext.encode())
     response = client.get(
-        "/api/jjt/callback", params={**signed_params(echostr), "echostr": echostr}
+        "/jjt-robot/callback", params={**signed_params(echostr), "echostr": echostr}
     )
     assert response.status_code == 200
     assert response.content == plaintext.encode()
@@ -152,7 +152,7 @@ def test_get_callback_invalid_signature_returns_403(client_and_dir) -> None:
     client, _ = client_and_dir
     echostr = encrypt_for_test(b"callback-ok")
     response = client.get(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params={
             "msg_signature": "0" * 40,
             "timestamp": "1",
@@ -165,7 +165,7 @@ def test_get_callback_invalid_signature_returns_403(client_and_dir) -> None:
 
 def test_get_callback_missing_parameter_returns_400(client_and_dir) -> None:
     client, _ = client_and_dir
-    response = client.get("/api/jjt/callback")
+    response = client.get("/jjt-robot/callback")
     assert response.status_code == 400
 
 
@@ -173,7 +173,7 @@ def test_get_callback_supports_wecom_corp_id(wecom_client_and_dir) -> None:
     client, _ = wecom_client_and_dir
     echostr = encrypt_for_test(b"wecom-callback-ok", WECOM_CORP_ID.encode())
     response = client.get(
-        "/api/jjt/callback", params={**signed_params(echostr), "echostr": echostr}
+        "/jjt-robot/callback", params={**signed_params(echostr), "echostr": echostr}
     )
     assert response.status_code == 200
     assert response.content == b"wecom-callback-ok"
@@ -183,7 +183,7 @@ def test_post_valid_message_returns_200(client_and_dir) -> None:
     client, _ = client_and_dir
     encrypted = encrypt_for_test(json.dumps(sample_message()).encode("utf-8"))
     response = client.post(
-        "/api/jjt/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
+        "/jjt-robot/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
     )
     assert response.status_code == 200
     assert response.content == b""
@@ -200,7 +200,7 @@ def test_post_invalid_msg_signature_returns_403_without_persistence(
     params["msg_signature"] = "invalid-signature"
 
     response = client.post(
-        "/api/jjt/callback", params=params, json={"encrypt": encrypted}
+        "/jjt-robot/callback", params=params, json={"encrypt": encrypted}
     )
 
     assert response.status_code == 403
@@ -219,7 +219,7 @@ def test_post_tampered_ciphertext_with_valid_signature_returns_400_without_persi
     tampered = base64.b64encode(ciphertext).decode("ascii")
 
     response = client.post(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params=signed_params(tampered),
         json={"encrypt": tampered},
     )
@@ -240,7 +240,7 @@ def test_post_ciphertext_from_wrong_aes_key_returns_400_without_persistence(
     )
 
     response = client.post(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params=signed_params(encrypted),
         json={"encrypt": encrypted},
     )
@@ -254,7 +254,7 @@ def test_post_creates_jsonl_record(client_and_dir) -> None:
     message = sample_message()
     encrypted = encrypt_for_test(json.dumps(message).encode("utf-8"))
     response = client.post(
-        "/api/jjt/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
+        "/jjt-robot/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
     )
     assert response.status_code == 200
     files = list(data_dir.glob("*.jsonl"))
@@ -272,7 +272,7 @@ def test_post_json_callback_also_saves_sqlite(client_and_dir) -> None:
     message = sample_message("callback-database-001")
     encrypted = encrypt_for_test(json.dumps(message).encode("utf-8"))
     response = client.post(
-        "/api/jjt/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
+        "/jjt-robot/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
     )
     detail = client.get("/api/messages/callback-database-001")
     assert response.status_code == 200
@@ -289,7 +289,7 @@ def test_post_json_callback_automatically_detects_report(client_and_dir) -> None
     }
     encrypted = encrypt_for_test(json.dumps(message).encode("utf-8"))
     response = client.post(
-        "/api/jjt/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
+        "/jjt-robot/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
     )
     detail = client.get("/api/messages/callback-report-001")
     assert response.status_code == 200
@@ -303,7 +303,7 @@ def test_duplicate_msgid_is_saved_once(client_and_dir) -> None:
     for _ in range(2):
         encrypted = encrypt_for_test(json.dumps(message).encode("utf-8"))
         response = client.post(
-            "/api/jjt/callback",
+            "/jjt-robot/callback",
             params=signed_params(encrypted),
             json={"encrypt": encrypted},
         )
@@ -315,7 +315,7 @@ def test_duplicate_msgid_is_saved_once(client_and_dir) -> None:
 def test_post_missing_encrypt_returns_422(client_and_dir) -> None:
     client, _ = client_and_dir
     response = client.post(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params={"msg_signature": "x", "timestamp": "1", "nonce": "2"},
         json={},
     )
@@ -326,7 +326,7 @@ def test_post_json_envelope_requires_lowercase_encrypt(client_and_dir) -> None:
     client, _ = client_and_dir
     encrypted = encrypt_for_test(json.dumps(sample_message()).encode("utf-8"))
     response = client.post(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params=signed_params(encrypted),
         json={"Encrypt": encrypted},
     )
@@ -345,7 +345,7 @@ def test_post_json_does_not_call_xml_envelope_parser(
     message = sample_message("json-parser-isolation")
     encrypted = encrypt_for_test(json.dumps(message).encode("utf-8"))
     response = client.post(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params=signed_params(encrypted),
         json={"encrypt": encrypted},
     )
@@ -365,7 +365,7 @@ def test_post_json_voice_is_saved_as_unsupported(client_and_dir) -> None:
     }
     encrypted = encrypt_for_test(json.dumps(message).encode("utf-8"))
     response = client.post(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params=signed_params(encrypted),
         json={"encrypt": encrypted},
     )
@@ -380,7 +380,7 @@ def test_post_non_json_plaintext_returns_400(client_and_dir) -> None:
     client, _ = client_and_dir
     encrypted = encrypt_for_test(b"not-json")
     response = client.post(
-        "/api/jjt/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
+        "/jjt-robot/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
     )
     assert response.status_code == 400
 
@@ -389,7 +389,7 @@ def test_post_invalid_utf8_plaintext_returns_400(client_and_dir) -> None:
     client, _ = client_and_dir
     encrypted = encrypt_for_test(b"\xff\xfe")
     response = client.post(
-        "/api/jjt/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
+        "/jjt-robot/callback", params=signed_params(encrypted), json={"encrypt": encrypted}
     )
     assert response.status_code == 400
 
@@ -399,7 +399,7 @@ def test_post_wecom_xml_returns_success_and_saves_jsonl(wecom_client_and_dir) ->
     plaintext = sample_wecom_xml()
     encrypted = encrypt_for_test(plaintext, WECOM_CORP_ID.encode())
     response = client.post(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params=signed_params(encrypted),
         content=encrypted_wecom_envelope(encrypted),
         headers={"content-type": "text/xml; charset=utf-8"},
@@ -426,7 +426,7 @@ def test_post_wecom_duplicate_msgid_is_saved_once(wecom_client_and_dir) -> None:
             sample_wecom_xml("wecom-duplicate"), WECOM_CORP_ID.encode()
         )
         response = client.post(
-            "/api/jjt/callback",
+            "/jjt-robot/callback",
             params=signed_params(encrypted),
             content=encrypted_wecom_envelope(encrypted),
             headers={"content-type": "application/xml"},
@@ -439,7 +439,7 @@ def test_post_wecom_duplicate_msgid_is_saved_once(wecom_client_and_dir) -> None:
 def test_post_wecom_xml_missing_encrypt_returns_400(wecom_client_and_dir) -> None:
     client, _ = wecom_client_and_dir
     response = client.post(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params={"msg_signature": "x", "timestamp": "1", "nonce": "2"},
         content=b"<xml><AgentID>1000002</AgentID></xml>",
         headers={"content-type": "text/xml"},
@@ -451,7 +451,7 @@ def test_post_wecom_invalid_plaintext_xml_returns_400(wecom_client_and_dir) -> N
     client, _ = wecom_client_and_dir
     encrypted = encrypt_for_test(b"<xml><broken>", WECOM_CORP_ID.encode())
     response = client.post(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params=signed_params(encrypted),
         content=encrypted_wecom_envelope(encrypted),
         headers={"content-type": "text/xml"},
@@ -463,7 +463,7 @@ def test_post_wecom_receive_id_mismatch_returns_400(wecom_client_and_dir) -> Non
     client, _ = wecom_client_and_dir
     encrypted = encrypt_for_test(sample_wecom_xml(), b"wrong-corp-id")
     response = client.post(
-        "/api/jjt/callback",
+        "/jjt-robot/callback",
         params=signed_params(encrypted),
         content=encrypted_wecom_envelope(encrypted),
         headers={"content-type": "text/xml"},

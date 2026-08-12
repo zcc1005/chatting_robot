@@ -129,4 +129,4 @@ def test_production_does_not_register_mock_trigger_api(tmp_path: Path) -> None:
 
 
 def test_callback_route_absent_when_disabled(mock_client) -> None:
-    assert mock_client.get("/api/jjt/callback").status_code == 404
+    assert mock_client.get("/jjt-robot/callback").status_code == 404

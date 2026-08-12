@@ -36,7 +36,17 @@ if ($LASTEXITCODE -ne 0) {
     throw "docker save failed."
 }
 
-Copy-Item -LiteralPath (Join-Path $projectRoot "compose.yaml") -Destination $bundleDir
+$composeSource = Get-Content -Raw -LiteralPath (Join-Path $projectRoot "compose.yaml") -Encoding UTF8
+$composeImagePattern = '(?m)^(\s*image:\s*)[^\r\n]+$'
+if (-not [regex]::IsMatch($composeSource, $composeImagePattern)) {
+    throw "compose.yaml does not contain an image declaration."
+}
+$packagedCompose = [regex]::Replace(
+    $composeSource,
+    $composeImagePattern,
+    ('$1' + $image),
+    1
+)
 
 $currentEnvPath = Join-Path $projectRoot ".env"
 $templateEnvPath = Join-Path $projectRoot ".env.docker.example"
@@ -78,6 +88,8 @@ $envLines = foreach ($line in Get-Content -LiteralPath $templateEnvPath -Encodin
 }
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$composePath = Join-Path $bundleDir "compose.yaml"
+[System.IO.File]::WriteAllText($composePath, $packagedCompose, $utf8NoBom)
 $envPath = Join-Path $bundleDir ".env.docker"
 [System.IO.File]::WriteAllLines($envPath, $envLines, $utf8NoBom)
 
@@ -125,7 +137,7 @@ Health check:
   curl http://127.0.0.1:8000/health
 
 Service callback path:
-  /api/jjt/callback
+  /jjt-robot/callback
 
 Operations:
   docker compose ps

@@ -105,7 +105,7 @@ def run_verification(
         }
     )
     echo_response = _request(
-        f"{normalized_base_url}/api/jjt/callback?{echo_query}",
+        f"{normalized_base_url}/jjt-robot/callback?{echo_query}",
         timeout_seconds=timeout_seconds,
     )
     if echo_response.status != 200 or echo_response.body != echo_plaintext:
@@ -143,7 +143,7 @@ def run_verification(
         "</xml>"
     ).encode("utf-8")
     post_response = _request(
-        f"{normalized_base_url}/api/jjt/callback?{message_query}",
+        f"{normalized_base_url}/jjt-robot/callback?{message_query}",
         method="POST",
         body=encrypted_envelope,
         headers={"Content-Type": "text/xml; charset=utf-8"},
