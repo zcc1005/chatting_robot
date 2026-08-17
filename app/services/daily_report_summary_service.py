@@ -55,6 +55,7 @@ def build_daily_report_preview(
     *,
     chatid: str,
     report_date: date,
+    chat_name: str | None = None,
     image_recognitions: list[MessageImageRecognition] | None = None,
 ) -> DailyReportPreviewResponse:
     _validate_nonnegative_quantities(reports)
@@ -121,8 +122,19 @@ def build_daily_report_preview(
         report_ids={report.id for report in reports},
     )
     linked_images: dict[int, list[SummaryProjectImage]] = defaultdict(list)
+    direct_attachment_ids: set[int] = set()
+    for report in included_reports:
+        for attachment in report.message.attachments:
+            if attachment.attachment_type != "image":
+                continue
+            direct_attachment_ids.add(attachment.id)
+            linked_images[report.id].append(
+                _direct_message_image(report, attachment)
+            )
     image_reviews: list[SummaryImageReview] = []
     for recognition in relevant_images:
+        if recognition.attachment_id in direct_attachment_ids:
+            continue
         association = recognition.association
         if (
             recognition.recognition_status == "completed"
@@ -219,6 +231,8 @@ def build_daily_report_preview(
             project_report_id=report.id,
             msgid=report.msgid,
             project_name=report.project_name or "",
+            management_count=report.management_count,
+            worker_count=report.worker_count,
             weather=report.weather,
             work_items=[
                 ExtractedWorkItem(
@@ -263,6 +277,7 @@ def build_daily_report_preview(
     generation_status = "needs_review" if warnings else "completed"
     markdown_content = render_markdown(
         chatid=chatid,
+        chat_name=chat_name,
         report_date=report_date,
         project_count=len(included_reports),
         fully_complete_project_count=fully_complete_project_count,
@@ -281,6 +296,7 @@ def build_daily_report_preview(
     )
     return DailyReportPreviewResponse(
         chatid=chatid,
+        chat_name=chat_name,
         report_date=report_date,
         project_count=len(included_reports),
         fully_complete_project_count=fully_complete_project_count,
@@ -303,6 +319,7 @@ def build_daily_report_preview(
 def render_markdown(
     *,
     chatid: str,
+    chat_name: str | None,
     report_date: date,
     project_count: int,
     fully_complete_project_count: int,
@@ -322,8 +339,11 @@ def render_markdown(
     lines = [
         f"# {report_date.isoformat()} 施工日报汇总预览",
         "",
-        f"- 群聊：{_one_line(chatid)}",
         f"- 日期：{report_date.isoformat()}",
+    ]
+    if chat_name:
+        lines.append(f"- 单位群：{_one_line(chat_name)}")
+    lines.extend([
         "",
         "## 总体概览",
         "",
@@ -335,7 +355,7 @@ def render_markdown(
         "",
         "## 机械设备汇总",
         "",
-    ]
+    ])
     if equipment:
         lines.extend(
             f"- {_one_line(item.name)}：{item.count} {_one_line(item.unit)}"
@@ -574,6 +594,24 @@ def _summary_project_image(
         scene_description=recognition.scene_description,
         confidence=recognition.confidence,
         association_status=association.association_status,
+    )
+
+
+def _direct_message_image(report, attachment) -> SummaryProjectImage:
+    """同一消息气泡的图片直接归入对应项目，不做视觉识别。"""
+    return SummaryProjectImage(
+        attachment_id=attachment.id,
+        image_msgid=report.message.msgid,
+        source_url=attachment.remote_url,
+        project_name=report.project_name,
+        captured_at=None,
+        weather=None,
+        location=None,
+        construction_content=None,
+        ocr_text=None,
+        scene_description=None,
+        confidence=None,
+        association_status="manual",
     )
 
 

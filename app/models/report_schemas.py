@@ -176,6 +176,7 @@ class ProjectReportResponse(BaseModel):
     msgid: str
     message_id: int
     chatid: str
+    chat_name: str | None
     project_name: str | None
     report_date: date | None
     weather: str | None

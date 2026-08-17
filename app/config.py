@@ -9,6 +9,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -76,7 +77,9 @@ class Settings:
     image_max_bytes: int = 10_000_000
     enable_auto_image_recognition: bool = False
     enable_real_response_send: bool = False
+    enable_auto_chat_workflow: bool = False
     response_send_timeout_seconds: float = 10.0
+    public_base_url: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -122,9 +125,13 @@ class Settings:
             enable_real_response_send=_read_bool(
                 "ENABLE_REAL_RESPONSE_SEND", False
             ),
+            enable_auto_chat_workflow=_read_bool(
+                "ENABLE_AUTO_CHAT_WORKFLOW", False
+            ),
             response_send_timeout_seconds=_read_float(
                 "RESPONSE_SEND_TIMEOUT_SECONDS", 10.0
             ),
+            public_base_url=os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/"),
         )
         settings.validate()
         return settings
@@ -175,6 +182,17 @@ class Settings:
         if self.response_send_timeout_seconds <= 0:
             raise ConfigurationError(
                 "RESPONSE_SEND_TIMEOUT_SECONDS 必须大于 0"
+            )
+        if self.public_base_url:
+            parsed = urlsplit(self.public_base_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ConfigurationError("PUBLIC_BASE_URL 必须是有效的 HTTP(S) 地址")
+            if parsed.query or parsed.fragment:
+                raise ConfigurationError("PUBLIC_BASE_URL 不能包含查询参数或片段")
+        if self.enable_auto_chat_workflow and not self.enable_real_response_send:
+            raise ConfigurationError(
+                "ENABLE_AUTO_CHAT_WORKFLOW=true 时必须同时启用 "
+                "ENABLE_REAL_RESPONSE_SEND=true"
             )
         resolved_log_level = getattr(logging, self.log_level.upper(), None)
         if not isinstance(resolved_log_level, int):

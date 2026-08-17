@@ -15,6 +15,7 @@ from app.api.image_recognitions import router as image_recognitions_router
 from app.api.mock import router as mock_router
 from app.api.project_reports import router as project_reports_router
 from app.api.report_detections import router as report_detections_router
+from app.api.visual_reports import router as visual_reports_router
 from app.config import Settings
 from app.database import configure_database, init_db
 from app.logging_config import configure_logging
@@ -118,7 +119,7 @@ def create_app(
 
     application = FastAPI(
         title="交建通施工日报机器人",
-        version="0.2.0",
+        version="0.2.8",
         lifespan=lifespan,
     )
 
@@ -131,6 +132,7 @@ def create_app(
     application.include_router(project_reports_router)
     application.include_router(image_recognitions_router)
     application.include_router(daily_reports_router)
+    application.include_router(visual_reports_router)
     if active_settings.mock_api_available:
         application.include_router(mock_router)
         application.include_router(dev_chat_router)

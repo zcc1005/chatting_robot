@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +15,7 @@ from app.models.database_models import (
     DailyReportSummary,
     DailyReportSummaryItem,
     Message,
+    MessageAttachment,
     ProjectReport,
     ReportEquipment,
     ReportWorkItem,
@@ -33,6 +35,7 @@ def summary_client(tmp_path: Path):
         enable_jjt_callback=False,
         database_url=sqlite_url(tmp_path / "summaries.db"),
         message_data_dir=tmp_path / "messages",
+        public_base_url="https://reports.example.com",
     )
     with TestClient(create_app(settings)) as client:
         yield client
@@ -45,12 +48,14 @@ def seed_report(
     project_name: str | None,
     extraction_status: str = "completed",
     chatid: str = CHATID,
+    chat_name: str | None = None,
     report_date: date = REPORT_DATE,
     management_count: int | None = 2,
     worker_count: int | None = 10,
     equipment: list[tuple[str, int, str]] | None = None,
     work_items: list[tuple[str | None, str, str | None]] | None = None,
     missing_fields: list[str] | None = None,
+    image_paths: list[Path] | None = None,
 ) -> int:
     equipment = (
         [("挖掘机", 1, "台")] if equipment is None else equipment
@@ -76,6 +81,7 @@ def seed_report(
             msgid=msgid,
             source="mock",
             chatid=chatid,
+            chat_name=chat_name,
             chattype="group",
             sender_userid="summary-user",
             msgtype="text",
@@ -86,6 +92,15 @@ def seed_report(
         )
         session.add(message)
         session.flush()
+        for index, image_path in enumerate(image_paths or []):
+            message.attachments.append(
+                MessageAttachment(
+                    attachment_type="image",
+                    remote_url=f"https://images.example.com/{msgid}-{index}.jpg",
+                    local_path=str(image_path.resolve()),
+                    download_status="downloaded",
+                )
+            )
         report = ProjectReport(
             msgid=msgid,
             message_id=message.id,
@@ -326,15 +341,15 @@ def test_missing_people_count_is_not_treated_as_zero(summary_client) -> None:
     assert "未完整统计" in body["markdown_content"]
 
 
-def test_duplicate_project_is_marked_and_not_summed(summary_client) -> None:
-    first_id = seed_report(
+def test_duplicate_project_automatically_uses_latest(summary_client) -> None:
+    seed_report(
         summary_client,
         msgid="duplicate-one",
         project_name="重复桥梁项目",
         management_count=3,
         worker_count=20,
     )
-    second_id = seed_report(
+    seed_report(
         summary_client,
         msgid="duplicate-two",
         project_name="重复桥梁项目",
@@ -342,23 +357,140 @@ def test_duplicate_project_is_marked_and_not_summed(summary_client) -> None:
         worker_count=30,
     )
     body = preview(summary_client).json()
-    assert body["project_count"] == 0
-    assert body["management_total"] is None
-    assert body["worker_total"] is None
-    assert body["generation_status"] == "needs_review"
-    duplicate = body["duplicate_projects"][0]
-    assert duplicate["project_name"] == "重复桥梁项目"
-    assert {item["project_report_id"] for item in duplicate["reports"]} == {
-        first_id,
-        second_id,
-    }
-    assert {item["msgid"] for item in duplicate["reports"]} == {
-        "duplicate-one",
-        "duplicate-two",
-    }
-    assert "发现 2 条重复日报，请人工选择有效记录" in body["markdown_content"]
-    assert "duplicate-one" not in body["markdown_content"]
-    assert "duplicate-two" not in body["markdown_content"]
+    assert body["project_count"] == 1
+    assert body["management_total"] == 4
+    assert body["worker_total"] == 30
+    assert body["generation_status"] == "completed"
+    assert body["duplicate_projects"] == []
+
+
+def test_same_project_in_different_groups_is_strictly_isolated(
+    summary_client,
+) -> None:
+    seed_report(
+        summary_client,
+        msgid="group-a-old",
+        chatid="unit-group-a",
+        project_name="同名项目",
+        management_count=2,
+        worker_count=10,
+    )
+    seed_report(
+        summary_client,
+        msgid="group-a-new",
+        chatid="unit-group-a",
+        project_name="同名项目",
+        management_count=3,
+        worker_count=20,
+    )
+    seed_report(
+        summary_client,
+        msgid="group-b-only",
+        chatid="unit-group-b",
+        project_name="同名项目",
+        management_count=8,
+        worker_count=80,
+    )
+
+    group_a = preview(summary_client, chatid="unit-group-a").json()
+    group_b = preview(summary_client, chatid="unit-group-b").json()
+
+    assert (group_a["management_total"], group_a["worker_total"]) == (3, 20)
+    assert (group_b["management_total"], group_b["worker_total"]) == (8, 80)
+    assert group_a["project_count"] == group_b["project_count"] == 1
+
+
+def test_real_group_name_is_displayed_without_internal_chatid(
+    summary_client,
+) -> None:
+    seed_report(
+        summary_client,
+        msgid="named-group-report",
+        chatid="internal-chat-id",
+        chat_name="中交三航局三级单位群",
+        project_name="桥梁一标",
+    )
+    body = preview(summary_client, chatid="internal-chat-id").json()
+    assert body["chat_name"] == "中交三航局三级单位群"
+    assert "单位群：中交三航局三级单位群" in body["markdown_content"]
+    assert "internal-chat-id" not in body["markdown_content"]
+
+
+def test_visual_report_has_charts_and_direct_message_images(
+    summary_client, tmp_path: Path
+) -> None:
+    image_path = tmp_path / "messages" / "project-site.jpg"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"\xff\xd8\xff\xe0project-image")
+    seed_report(
+        summary_client,
+        msgid="visual-source",
+        project_name="可视化桥梁项目",
+        management_count=5,
+        worker_count=42,
+        image_paths=[image_path],
+    )
+    saved = summary_client.post(
+        "/api/daily-reports",
+        json={"chatid": CHATID, "report_date": REPORT_DATE.isoformat()},
+    ).json()
+
+    assert saved["visual_report_url"].startswith(
+        "https://reports.example.com/visual-reports/"
+    )
+    assert "点击查看图表与项目图片" in saved["markdown_content"]
+    assert len(saved["projects"][0]["images"]) == 1
+    assert saved["image_reviews"] == []
+
+    page_path = urlsplit(saved["visual_report_url"]).path
+    page = summary_client.get(page_path)
+    assert page.status_code == 200
+    assert page.headers["content-type"].startswith("text/html")
+    assert '<svg' in page.text
+    assert "各项目人员分布" in page.text
+    assert "可视化桥梁项目" in page.text
+    assert "report-shell" in page.text
+    attachment_id = saved["projects"][0]["images"][0]["attachment_id"]
+    image = summary_client.get(f"{page_path}/images/{attachment_id}")
+    assert image.status_code == 200
+    assert image.content.startswith(b"\xff\xd8\xff")
+
+
+def test_visual_report_token_cannot_read_another_summary_image(
+    summary_client, tmp_path: Path
+) -> None:
+    first_image = tmp_path / "messages" / "first.jpg"
+    second_image = tmp_path / "messages" / "second.jpg"
+    first_image.parent.mkdir(parents=True, exist_ok=True)
+    first_image.write_bytes(b"\xff\xd8\xfffirst")
+    second_image.write_bytes(b"\xff\xd8\xffsecond")
+    seed_report(
+        summary_client,
+        msgid="token-first",
+        project_name="第一项目",
+        chatid="token-group-a",
+        image_paths=[first_image],
+    )
+    seed_report(
+        summary_client,
+        msgid="token-second",
+        project_name="第二项目",
+        chatid="token-group-b",
+        image_paths=[second_image],
+    )
+    first = summary_client.post(
+        "/api/daily-reports",
+        json={"chatid": "token-group-a", "report_date": REPORT_DATE.isoformat()},
+    ).json()
+    second = summary_client.post(
+        "/api/daily-reports",
+        json={"chatid": "token-group-b", "report_date": REPORT_DATE.isoformat()},
+    ).json()
+    first_path = urlsplit(first["visual_report_url"]).path
+    second_attachment = second["projects"][0]["images"][0]["attachment_id"]
+    assert summary_client.get(
+        f"{first_path}/images/{second_attachment}"
+    ).status_code == 404
 
 
 def test_no_valid_report_returns_review_preview(summary_client) -> None:
@@ -485,6 +617,8 @@ def test_markdown_contains_required_sections_and_content(summary_client) -> None
         "## 待确认和缺失信息",
     ):
         assert expected in markdown
+    assert "群聊：" not in markdown
+    assert CHATID not in markdown
 
 
 def test_summary_list_filters(summary_client) -> None:

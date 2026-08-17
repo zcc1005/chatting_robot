@@ -100,6 +100,66 @@ def test_weather_situation_and_common_site_equipment_are_recognized(
     assert "包含施工内容" in body["matched_rules"]
 
 
+def test_production_haier_wording_is_report_candidate(detection_client) -> None:
+    body = detection_client.post(
+        "/api/dev/mock-message",
+        json=text_message(
+            "haier-production-report",
+            "海尔胶州项目2026年8月12日施工情况，天气情况：阴，"
+            "总施工人数：18人，叉车1辆，直臂车1台。",
+        ),
+    ).json()
+
+    assert body["detection_status"] == "report_candidate"
+    assert body["score"] >= 5
+    assert "包含施工内容" in body["matched_rules"]
+    assert "包含人员数量" in body["matched_rules"]
+    assert "包含机械设备数量" in body["matched_rules"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "胶州厂房工程8月13日现场进展：总人数18名，2台挖机，今天完成基础开挖。",
+        "一工区当日施工，劳务工人共26人，高空作业车1台，钢筋绑扎完成80%。",
+        "桥梁标段人员情况：普工12人；机械情况：1辆洒水车；工程进度正常。",
+        "项目现场日报：管理5人、作业员20名，铲车2台，明日计划继续路基施工。",
+    ],
+)
+def test_broader_real_world_report_wording_is_candidate(
+    detection_client, content: str
+) -> None:
+    body = detection_client.post(
+        "/api/dev/mock-message",
+        json=text_message(f"broader-{abs(hash(content))}", content),
+    ).json()
+
+    assert body["detection_status"] == "report_candidate"
+    assert body["score"] >= 5
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "明天上午开施工协调会",
+        "项目群里有人吗",
+        "叉车钥匙放在哪里？",
+        "今天工人放假吗？",
+        "工程进度怎么样了？",
+    ],
+)
+def test_broader_rules_do_not_promote_isolated_weak_signals(
+    detection_client, content: str
+) -> None:
+    body = detection_client.post(
+        "/api/dev/mock-message",
+        json=text_message(f"boundary-{abs(hash(content))}", content),
+    ).json()
+
+    assert body["detection_status"] == "ignored"
+    assert body["is_report_candidate"] is False
+
+
 @pytest.mark.parametrize(
     ("msgid", "content"),
     [

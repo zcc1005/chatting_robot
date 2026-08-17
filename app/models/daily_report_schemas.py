@@ -98,6 +98,8 @@ class SummaryProjectDetail(BaseModel):
     project_report_id: int
     msgid: str
     project_name: str
+    management_count: int | None = Field(default=None, ge=0)
+    worker_count: int | None = Field(default=None, ge=0)
     weather: str | None
     work_items: list[ExtractedWorkItem]
     tomorrow_plan: str | None
@@ -109,6 +111,7 @@ class SummaryProjectDetail(BaseModel):
 
 class DailyReportPreviewResponse(BaseModel):
     chatid: str
+    chat_name: str | None = None
     report_date: date
     project_count: int = Field(ge=0)
     fully_complete_project_count: int = Field(ge=0)
@@ -125,6 +128,7 @@ class DailyReportPreviewResponse(BaseModel):
     generation_status: GenerationStatus
     warnings: list[str]
     markdown_content: str
+    visual_report_url: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -169,6 +173,7 @@ class DailyReportSummaryResponse(DailyReportPreviewResponse):
 class DailyReportSummaryListItem(BaseModel):
     id: int
     chatid: str
+    chat_name: str | None = None
     report_date: date
     project_count: int = Field(ge=0)
     fully_complete_project_count: int = Field(ge=0)

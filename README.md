@@ -16,7 +16,7 @@
 - 提供开发环境明文模拟接口、消息列表和详情查询接口；
 - 健康检查和本地自动化测试。
 
-当前未实现：生产环境自动命令识别、定时发送、真实 `response_url` 协议联调、文件内容识别，以及在真实交建通消息协议中发送图文卡片。开发验收页面已经提供仅限本地 Mock 的日报命令自动闭环。
+当前已实现生产环境聊天闭环：真实回调可在配置开启后自动完成日报正文结构化提取、处理结果回执，以及按“生成日报/汇总日报”聊天指令生成并发送指定日期汇总。尚未实现定时发送、文件内容识别和真实交建通图文卡片发送。
 
 ## 环境要求与安装
 
@@ -71,10 +71,10 @@ Copy-Item .env.docker.example .env.docker
 docker login --username=alyzcc crpi-5zyp5pdzn7yrv5oo.cn-beijing.personal.cr.aliyuncs.com
 ```
 
-构建并推送版本 `0.2.0`，同时更新 `latest`：
+构建并推送版本 `0.2.6`，同时更新 `latest`：
 
 ```powershell
-.\scripts\build-and-push.ps1 -Tag 0.2.0 -AlsoLatest
+.\scripts\build-and-push.ps1 -Tag 0.2.6 -AlsoLatest
 ```
 
 脚本默认构建常见的 `linux/amd64` 镜像；如果阿里云服务器是 ARM 实例，改用 `-Platform linux/arm64`。
@@ -82,7 +82,7 @@ docker login --username=alyzcc crpi-5zyp5pdzn7yrv5oo.cn-beijing.personal.cr.aliy
 脚本推送到：
 
 ```text
-crpi-5zyp5pdzn7yrv5oo.cn-beijing.personal.cr.aliyuncs.com/zcc_0811/chat_robot:0.2.0
+crpi-5zyp5pdzn7yrv5oo.cn-beijing.personal.cr.aliyuncs.com/zcc_0811/chat_robot:0.2.6
 ```
 
 ### 3. 在服务器启动
@@ -99,7 +99,7 @@ curl http://127.0.0.1:8000/health
 如需换端口，可在命令前设置 `HOST_PORT`；如需部署其他标签，可设置 `IMAGE_TAG`。例如 Linux Shell：
 
 ```bash
-HOST_PORT=8080 IMAGE_TAG=0.2.0 docker compose up -d
+HOST_PORT=8080 IMAGE_TAG=0.2.6 docker compose up -d
 ```
 
 查看日志和停止服务：
@@ -212,17 +212,18 @@ https://你的公网HTTPS域名/jjt-robot/callback
 - `ignored`：分数不高于 1，普通聊天或不像日报；
 - `not_applicable`：不是 `text`/`mixed` 正文消息，或正文为空。
 
-当前 `rules-v3` 规则与分数：
+当前 `rules-v4` 使用“强特征 + 多个弱特征组合”的方式判断，既支持常见现场口语，也避免单个施工词触发日报处理。主要规则与分数：
 
 | 规则 | 分数 |
 | --- | ---: |
 | 包含“施工日报”或明显的“项目日报” | +4 |
-| 包含“今日完成”“今日施工”“施工内容”或“施工进度” | +2 |
+| 包含“今日/当日完成”“施工情况”“现场进展”“工程进度”“作业内容”等施工表达 | +2 |
 | 包含 `2026年8月6日`、`2026-08-06`、`8月6日` 等日期 | +1 |
-| 包含“管理人员8人”“施工人员117人”“作业人员20人”等人员数量 | +1 |
-| 包含“挖掘机2台”“吊车1辆”“机械设备3台”等机械设备数量 | +1 |
+| 包含“总人数18名”“工人20人”“劳务人员26人”“技工/普工”等人员数量 | +1 |
+| 包含“挖机2台”“1辆洒水车”“高空作业车1台”等机械设备数量 | +1 |
 | 包含“天气晴”“晴天”“小雨”等天气描述 | +1 |
 | 包含项目、标段、工区、楼栋、隧道、桥梁等工程场景词 | +1 |
+| 包含“人员情况”“机械情况”“明日计划”“安全情况”等日报栏目 | +1 |
 | 去除正文首尾空白后长度不少于 30 个字符 | +1 |
 | 不超过 30 字且明显是在询问或催要日报，如“今天的施工日报呢” | -4 |
 
@@ -543,6 +544,7 @@ Content-Type: application/json
 
 ```dotenv
 ENABLE_REAL_RESPONSE_SEND=false
+ENABLE_AUTO_CHAT_WORKFLOW=false
 RESPONSE_SEND_TIMEOUT_SECONDS=10
 ```
 
@@ -588,9 +590,19 @@ Content-Type: application/json
 
 发送记录只保存 SHA-256 `response_url_hash`，不会保存完整 `response_url`；日志也不会输出完整 URL、API Key 或 Markdown 正文。失败只会把发布状态置为 `send_failed` 并记录受控错误，不会删除或改写汇总 Markdown、来源关联、结构化日报和原始消息。
 
-虽然提供了 `ENABLE_REAL_RESPONSE_SEND` 安全开关，但本地交建通材料没有给出可核验的 `response_url` 请求体协议。为遵守“不猜测协议字段”的要求，真实模式当前会在网络请求前以 `response_protocol_not_confirmed` 失败并留存审计记录；待交建通回调联调确认请求体、目标域名和返回码语义后才能启用真实 HTTP 传输。后续真实实现必须只允许 HTTPS、设置超时且禁止跨域重定向。
+真实发送遵循《交建通机器人 API》的主动回复协议：向当前回调中的一次性 `response_url` POST `{"msgtype":"markdown","markdown":{"content":"..."}}`。客户端只允许 HTTPS、禁用重定向和系统代理、设置超时，并将 HTTP/平台错误写入发送审计；不会记录完整 URL 或回复正文。
 
-`response_url` 通常具有一次性和时效性，只应用于紧邻当前回调的发送，不应把历史消息中的地址当作长期凭据反复使用。当前只有 `/dev/chat` 会识别“生成日报”等本地验收命令并使用服务端生成的 `mock://` 地址自动完成离线闭环；真实交建通回调不会自动识别命令，也不会自动或定时发送。
+`response_url` 只能调用一次，有效期为 1 小时，只应用于紧邻当前回调的回复，不会复用历史地址。生产环境需要同时设置 `ENABLE_REAL_RESPONSE_SEND=true` 和 `ENABLE_AUTO_CHAT_WORKFLOW=true` 才会启用聊天自动闭环；任一开关关闭时，回调仍只负责验签、解密、入库和规则识别。自动工作流在回调快速返回 200 后作为后台任务执行，避免大模型调用导致平台回调超时。
+
+生产聊天行为：
+
+- 日报正文命中 `report_candidate` 或 `needs_review` 后自动调用结构化提取，并回复项目、日期和人数等识别结果；
+- “生成日报”“汇总8月12日日报”“发送今天施工日报”等指令会先补提取当前会话候选消息，再生成、保存并自动确认汇总，最后通过该指令消息的 `response_url` 回复 Markdown；
+- 无有效日报、重复项目或存在未完成提取记录时，只回复带告警的预览，不保存和发布；
+- 普通消息回复简短使用说明，不进入日报提取；
+- “你好”“早上好”“在吗”等招呼消息会回复一句机器人功能介绍；
+- 回调协议没有提供真实群名称，因此日报正文不展示内部 `chatid`；内部仍使用该值隔离不同会话的数据；
+- 当前仍不做定时汇总，人工修正继续通过既有 API/本地验收页完成。
 
 ## 企业微信自建应用验证
 

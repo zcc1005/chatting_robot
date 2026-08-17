@@ -34,6 +34,7 @@ def normalize_jjt_message(
         raise MessageNormalizationError("缺少必填字段 from.userid")
     sender_userid = _required_string(sender, "userid", path="from.userid")
     chatid = _resolve_chatid(payload, chattype, sender_userid)
+    chat_name = _resolve_chat_name(payload, chattype)
 
     text_content = ""
     attachments: list[NormalizedAttachment] = []
@@ -62,6 +63,7 @@ def normalize_jjt_message(
         msgid=msgid,
         aibotid=aibotid,
         chatid=chatid,
+        chat_name=chat_name,
         chattype=chattype,
         sender_userid=sender_userid,
         msgtype=msgtype,
@@ -93,6 +95,22 @@ def _resolve_chatid(
     if chattype == "single":
         return f"single:{sender_userid}"
     raise MessageNormalizationError("群聊消息缺少必填字段 chatid")
+
+
+def _resolve_chat_name(payload: dict[str, Any], chattype: str) -> str | None:
+    if chattype != "group":
+        return None
+    for key in ("chatname", "chat_name", "group_name", "groupname"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:500]
+    chat = payload.get("chat")
+    if isinstance(chat, dict):
+        for key in ("name", "title"):
+            value = chat.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:500]
+    return None
 
 
 def _nested_text(container: Any, key: str) -> str:

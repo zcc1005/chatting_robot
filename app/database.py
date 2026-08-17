@@ -72,6 +72,7 @@ def init_db(runtime: DatabaseRuntime | None = None) -> None:
         raise RuntimeError("数据库尚未配置")
     _migrate_process_status_constraint(active_engine)
     Base.metadata.create_all(bind=active_engine)
+    _migrate_message_chat_name_column(active_engine)
     _migrate_daily_report_publication_columns(active_engine)
     _migrate_project_report_review_columns(active_engine)
 
@@ -164,6 +165,7 @@ def _migrate_daily_report_publication_columns(active_engine: Engine) -> None:
         "confirmed_at": "DATETIME",
         "confirmation_note": "TEXT",
         "sent_at": "DATETIME",
+        "public_token": "VARCHAR(128)",
     }
     with active_engine.begin() as connection:
         for name, sql_type in additions.items():
@@ -175,6 +177,23 @@ def _migrate_daily_report_publication_columns(active_engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS ix_daily_summaries_publication_status "
             "ON daily_report_summaries (publication_status)"
         )
+        connection.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_daily_summaries_public_token "
+            "ON daily_report_summaries (public_token)"
+        )
+
+
+def _migrate_message_chat_name_column(active_engine: Engine) -> None:
+    """为既有消息表增加真实群名字段；旧数据保持为空。"""
+    inspector = inspect(active_engine)
+    if "messages" not in inspector.get_table_names():
+        return
+    existing = {column["name"] for column in inspector.get_columns("messages")}
+    if "chat_name" not in existing:
+        with active_engine.begin() as connection:
+            connection.exec_driver_sql(
+                'ALTER TABLE messages ADD COLUMN "chat_name" VARCHAR(500)'
+            )
 
 
 def _migrate_project_report_review_columns(active_engine: Engine) -> None:
@@ -192,6 +211,7 @@ def _migrate_project_report_review_columns(active_engine: Engine) -> None:
         "relevance_confidence": "FLOAT",
         "date_source": "VARCHAR(64) NOT NULL DEFAULT 'missing'",
         "normalization_warnings": "TEXT NOT NULL DEFAULT '[]'",
+        "superseded_by_report_id": "INTEGER REFERENCES project_reports(id) ON DELETE SET NULL",
     }
     with active_engine.begin() as connection:
         for name, sql_type in additions.items():
@@ -202,4 +222,8 @@ def _migrate_project_report_review_columns(active_engine: Engine) -> None:
         connection.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_project_reports_relevance_status "
             "ON project_reports (relevance_status)"
+        )
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_project_reports_superseded_by "
+            "ON project_reports (superseded_by_report_id)"
         )

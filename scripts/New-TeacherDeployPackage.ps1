@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Tag = "0.2.0"
+    [string]$Tag = "0.2.6"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,50 +48,17 @@ $packagedCompose = [regex]::Replace(
     1
 )
 
-$currentEnvPath = Join-Path $projectRoot ".env"
 $templateEnvPath = Join-Path $projectRoot ".env.docker.example"
-if (-not (Test-Path -LiteralPath $currentEnvPath)) {
-    throw "Current configuration was not found: $currentEnvPath"
-}
-
-$currentValues = @{}
-foreach ($line in Get-Content -LiteralPath $currentEnvPath -Encoding UTF8) {
-    if ($line -match '^\s*([A-Z][A-Z0-9_]*)\s*=(.*)$') {
-        $currentValues[$Matches[1]] = $Matches[2]
-    }
-}
-
-$overrides = @{
-    "JJT_MESSAGE_DATA_DIR" = "/app/data/messages"
-    "DATABASE_URL" = "sqlite:////app/data/jjt_bot.db"
-    "APP_ENV" = "production"
-    "ENABLE_MOCK_API" = "false"
-    "ENABLE_JJT_CALLBACK" = "true"
-    "ENABLE_REAL_RESPONSE_SEND" = "true"
-}
-
-$envLines = foreach ($line in Get-Content -LiteralPath $templateEnvPath -Encoding UTF8) {
-    if ($line -match '^([A-Z][A-Z0-9_]*)=(.*)$') {
-        $key = $Matches[1]
-        $value = $Matches[2]
-        if ($currentValues.ContainsKey($key)) {
-            $value = $currentValues[$key]
-        }
-        if ($overrides.ContainsKey($key)) {
-            $value = $overrides[$key]
-        }
-        "$key=$value"
-    }
-    else {
-        $line
-    }
+if (-not (Test-Path -LiteralPath $templateEnvPath)) {
+    throw "Configuration template was not found: $templateEnvPath"
 }
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $composePath = Join-Path $bundleDir "compose.yaml"
 [System.IO.File]::WriteAllText($composePath, $packagedCompose, $utf8NoBom)
-$envPath = Join-Path $bundleDir ".env.docker"
-[System.IO.File]::WriteAllLines($envPath, $envLines, $utf8NoBom)
+$envExamplePath = Join-Path $bundleDir ".env.docker.example"
+$envExample = Get-Content -Raw -LiteralPath $templateEnvPath -Encoding UTF8
+[System.IO.File]::WriteAllText($envExamplePath, $envExample, $utf8NoBom)
 
 $deploySh = @'
 #!/usr/bin/env bash
@@ -99,6 +66,40 @@ set -euo pipefail
 cd "$(dirname "$0")"
 docker version >/dev/null
 docker compose version >/dev/null
+if [ ! -f .env.docker ]; then
+  echo "ERROR: .env.docker was not found in $(pwd)." >&2
+  echo "Copy the .env.docker from the currently running 0.2.1 deployment here, then run deploy.sh again." >&2
+  exit 1
+fi
+cp .env.docker ".env.docker.backup-$(date +%Y%m%d-%H%M%S)"
+set_env() {
+  key="$1"
+  value="$2"
+  if grep -q "^${key}=" .env.docker; then
+    sed -i "s/^${key}=.*$/${key}=${value}/" .env.docker
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> .env.docker
+  fi
+}
+require_env() {
+  key="$1"
+  if ! grep -Eq "^${key}=.+" .env.docker; then
+    echo "ERROR: ${key} is missing or empty in .env.docker." >&2
+    exit 1
+  fi
+}
+require_env JJT_CALLBACK_TOKEN
+require_env JJT_ENCODING_AES_KEY
+require_env LLM_API_KEY
+require_env LLM_MODEL
+require_env LLM_BASE_URL
+set_env APP_ENV production
+set_env ENABLE_MOCK_API false
+set_env ENABLE_JJT_CALLBACK true
+set_env ENABLE_REAL_RESPONSE_SEND true
+set_env ENABLE_AUTO_CHAT_WORKFLOW true
+set_env JJT_MESSAGE_DATA_DIR /app/data/messages
+set_env DATABASE_URL sqlite:////app/data/jjt_bot.db
 docker load -i "__IMAGE_TAR__"
 docker compose up -d
 docker compose ps
@@ -111,6 +112,39 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 docker version | Out-Null
 docker compose version | Out-Null
+if (-not (Test-Path -LiteralPath ".env.docker")) {
+    throw "Copy .env.docker from the currently running 0.2.1 deployment here, then run deploy.ps1 again."
+}
+Copy-Item -LiteralPath ".env.docker" -Destination (".env.docker.backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+$lines = [System.Collections.Generic.List[string]](Get-Content -LiteralPath ".env.docker" -Encoding UTF8)
+function Get-EnvValue([string]$Key) {
+    $prefix = "$Key="
+    foreach ($line in $lines) {
+        if ($line.StartsWith($prefix)) { return $line.Substring($prefix.Length) }
+    }
+    return $null
+}
+function Set-EnvValue([string]$Key, [string]$Value) {
+    $prefix = "$Key="
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index].StartsWith($prefix)) {
+            $lines[$index] = "$Key=$Value"
+            return
+        }
+    }
+    $lines.Add("$Key=$Value")
+}
+foreach ($key in @("JJT_CALLBACK_TOKEN", "JJT_ENCODING_AES_KEY", "LLM_API_KEY", "LLM_MODEL", "LLM_BASE_URL")) {
+    if ([string]::IsNullOrWhiteSpace((Get-EnvValue $key))) { throw "$key is missing or empty in .env.docker." }
+}
+Set-EnvValue "APP_ENV" "production"
+Set-EnvValue "ENABLE_MOCK_API" "false"
+Set-EnvValue "ENABLE_JJT_CALLBACK" "true"
+Set-EnvValue "ENABLE_REAL_RESPONSE_SEND" "true"
+Set-EnvValue "ENABLE_AUTO_CHAT_WORKFLOW" "true"
+Set-EnvValue "JJT_MESSAGE_DATA_DIR" "/app/data/messages"
+Set-EnvValue "DATABASE_URL" "sqlite:////app/data/jjt_bot.db"
+[System.IO.File]::WriteAllLines((Join-Path $PSScriptRoot ".env.docker"), $lines, (New-Object System.Text.UTF8Encoding($false)))
 docker load -i "__IMAGE_TAR__"
 docker compose up -d
 docker compose ps
@@ -128,10 +162,18 @@ Requirements:
 Linux deployment:
   unzip $bundleName.zip
   cd $bundleName
+  cp /path/to/current-0.2.1/.env.docker ./.env.docker
   bash deploy.sh
 
 Windows PowerShell deployment:
+  Copy-Item C:\path\to\current-0.2.1\.env.docker .\.env.docker
   .\deploy.ps1
+
+The deployment script backs up the existing configuration and enables:
+  ENABLE_REAL_RESPONSE_SEND=true
+  ENABLE_AUTO_CHAT_WORKFLOW=true
+
+It stops before changing the container if callback or LLM configuration is missing.
 
 Health check:
   curl http://127.0.0.1:8000/health
@@ -148,8 +190,8 @@ Operations:
 Data is stored in the Docker named volume chat-robot-data. Do not run
 docker compose down -v unless the database and message data may be deleted.
 
-SECURITY: .env.docker contains deployment credentials. Send this bundle only
-through a private trusted channel. Do not commit it or upload it publicly.
+SECURITY: this bundle contains no deployment credentials. Keep the copied
+.env.docker private and do not commit or upload it publicly.
 "@
 [System.IO.File]::WriteAllText((Join-Path $bundleDir "README-DEPLOY.txt"), $readme, $utf8NoBom)
 

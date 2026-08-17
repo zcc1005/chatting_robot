@@ -21,6 +21,7 @@ class NormalizedMessage(BaseModel):
     msgid: str = Field(min_length=1)
     aibotid: str | None = None
     chatid: str = Field(min_length=1)
+    chat_name: str | None = None
     chattype: Literal["group", "single"]
     sender_userid: str = Field(min_length=1)
     msgtype: str = Field(min_length=1)
@@ -145,6 +146,7 @@ class MessageListItem(BaseModel):
     msgid: str
     source: str
     chatid: str
+    chat_name: str | None
     chattype: str
     sender_userid: str
     msgtype: str
@@ -177,6 +179,7 @@ class MessageDetailResponse(BaseModel):
     source: str
     aibotid: str | None
     chatid: str
+    chat_name: str | None
     chattype: str
     sender_userid: str
     msgtype: str

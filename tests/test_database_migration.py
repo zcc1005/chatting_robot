@@ -69,6 +69,9 @@ def test_old_process_status_constraint_is_migrated_without_data_loss(
     try:
         init_db(runtime)
         constraints = inspect(runtime.engine).get_check_constraints("messages")
+        assert "chat_name" in {
+            column["name"] for column in inspect(runtime.engine).get_columns("messages")
+        }
         status_sql = next(
             item["sqltext"]
             for item in constraints
@@ -155,6 +158,7 @@ def test_existing_summary_table_gets_publication_columns_and_draft_default(
             "confirmed_at",
             "confirmation_note",
             "sent_at",
+            "public_token",
         }.issubset(columns)
         assert "daily_report_send_attempts" in inspector.get_table_names()
 
@@ -208,5 +212,15 @@ def test_existing_project_reports_get_review_audit_columns(
             "date_source",
             "normalization_warnings",
         }.issubset(columns)
+    finally:
+        runtime.engine.dispose()
+
+def test_people_confirmation_table_is_created(tmp_path: Path) -> None:
+    runtime = configure_database(sqlite_url(tmp_path / "confirmation.db"))
+    try:
+        init_db(runtime)
+        assert "people_confirmation_requests" in inspect(
+            runtime.engine
+        ).get_table_names()
     finally:
         runtime.engine.dispose()

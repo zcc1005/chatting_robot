@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Protocol
 from urllib.parse import urlsplit
+
+import httpx
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,12 +51,7 @@ class MockResponseUrlClient:
 
 
 class RealResponseUrlClient:
-    """真实传输安全边界。
-
-    本地提供的交建通文档没有 response_url 请求体协议。为避免猜测字段，
-    即使显式启用真实模式，本客户端也会在网络请求前返回可审计失败；待平台
-    联调确认请求体后，只需替换本类内部传输实现，不影响业务状态机。
-    """
+    """按照交建通机器人协议向一次性 response_url 回复 Markdown。"""
 
     transport = "real"
 
@@ -61,7 +59,6 @@ class RealResponseUrlClient:
         self.timeout_seconds = timeout_seconds
 
     def send(self, *, response_url: str, content: str) -> ResponseUrlSendResult:
-        del content
         parsed = urlsplit(response_url)
         if parsed.scheme.lower() != "https" or not parsed.hostname:
             return ResponseUrlSendResult(
@@ -70,9 +67,68 @@ class RealResponseUrlClient:
                 error_type="unsafe_response_url",
                 error_message="真实发送只允许有效的 HTTPS response_url",
             )
+        payload = {
+            "msgtype": "markdown",
+            "markdown": {"content": content},
+        }
+        try:
+            with httpx.Client(
+                timeout=httpx.Timeout(self.timeout_seconds),
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = client.post(response_url, json=payload)
+        except httpx.TimeoutException:
+            return ResponseUrlSendResult(
+                success=False,
+                transport=self.transport,
+                error_type="response_timeout",
+                error_message="交建通 response_url 请求超时",
+            )
+        except httpx.HTTPError:
+            return ResponseUrlSendResult(
+                success=False,
+                transport=self.transport,
+                error_type="response_network_error",
+                error_message="交建通 response_url 网络请求失败",
+            )
+
+        status_code = response.status_code
+        if not 200 <= status_code < 300:
+            return ResponseUrlSendResult(
+                success=False,
+                transport=self.transport,
+                http_status_code=status_code,
+                error_type="response_http_error",
+                error_message=f"交建通 response_url 返回 HTTP {status_code}",
+            )
+
+        platform_error = _platform_error(response)
+        if platform_error is not None:
+            return ResponseUrlSendResult(
+                success=False,
+                transport=self.transport,
+                http_status_code=status_code,
+                error_type="response_platform_error",
+                error_message=platform_error,
+            )
         return ResponseUrlSendResult(
-            success=False,
+            success=True,
             transport=self.transport,
-            error_type="response_protocol_not_confirmed",
-            error_message="交建通 response_url 请求协议尚未完成联调确认",
+            http_status_code=status_code,
         )
+
+
+def _platform_error(response: httpx.Response) -> str | None:
+    if not response.content:
+        return None
+    try:
+        body = response.json()
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    errcode = body.get("errcode")
+    if errcode in (None, 0, "0"):
+        return None
+    return f"交建通回复失败，errcode={str(errcode)[:32]}"

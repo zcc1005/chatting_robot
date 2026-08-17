@@ -170,6 +170,7 @@ def _to_response(record: ProjectReport) -> ProjectReportResponse:
         msgid=record.msgid,
         message_id=record.message_id,
         chatid=record.message.chatid,
+        chat_name=record.message.chat_name,
         project_name=record.project_name,
         report_date=record.report_date,
         weather=record.weather,

@@ -169,6 +169,129 @@ def test_compact_real_world_report_enters_daily_summary(client_and_llm) -> None:
     ]
 
 
+def test_explicit_people_totals_override_llm_misclassification(
+    client_and_llm,
+) -> None:
+    client, mock_llm = client_and_llm
+    mock_llm.responses = [
+        json.dumps(
+            full_extraction(
+                project_name="佳沃（淄博）全球数智农食产业基地项目",
+                report_date="2026-08-12",
+                management_count=9,
+                worker_count=None,
+                missing_fields=["worker_count"],
+            ),
+            ensure_ascii=False,
+        )
+    ]
+    content = (
+        "佳沃（淄博）全球数智农食产业基地项目2026年8月12日施工情况\n"
+        "1、天气情况：晴，气温27℃~39℃\n"
+        "2、机械情况：吊车1台\n"
+        "3、施工总人数：36人\n"
+        "4、施工内容：\n"
+        "(1)8#厂房：一层垃圾清理4人\n"
+        "(2)8#9#中间连廊：梁钢筋绑扎3人，梁板模板支护3人\n"
+        "(3)9#厂房：二层女儿墙拆模4人\n"
+        "(4)10#厂房及北侧连廊：高支模内架搭设6人，普工3人\n"
+        "5、管理及后台\n"
+        "(5)主体单位管理人员6人\n"
+        "(6)市政单位管理人员1人\n"
+        "(7)安全文明施工2人\n"
+        "(8)钢筋后台加工3人"
+    )
+    saved = client.post(
+        "/api/dev/mock-message",
+        json=report_message("explicit-people-override", content),
+    )
+    assert saved.json()["detection_status"] == "report_candidate"
+
+    extracted = client.post(
+        "/api/messages/explicit-people-override/extract-report"
+    ).json()
+
+    assert extracted["management_count"] == 7
+    assert extracted["worker_count"] == 36
+    assert "management_count" not in extracted["missing_fields"]
+    assert "worker_count" not in extracted["missing_fields"]
+    assert any(
+        "施工总人数为 36 人" in warning
+        for warning in extracted["normalization_warnings"]
+    )
+    assert any(
+        "管理人员数量为 7 人" in warning
+        for warning in extracted["normalization_warnings"]
+    )
+
+
+def test_work_item_people_are_not_guessed_as_worker_total(
+    client_and_llm,
+) -> None:
+    client, mock_llm = client_and_llm
+    mock_llm.responses = [
+        json.dumps(full_extraction(worker_count=12), ensure_ascii=False)
+    ]
+    content = (
+        "桥梁项目2026年8月12日施工情况：桩基施工4人，钢筋绑扎3人，"
+        "模板支护5人。"
+    )
+    client.post(
+        "/api/dev/mock-message",
+        json=report_message("no-worker-total-guess", content),
+    )
+    extracted = client.post(
+        "/api/messages/no-worker-total-guess/extract-report"
+    ).json()
+
+    assert extracted["worker_count"] == 12
+    assert not any(
+        "施工总人数" in warning
+        for warning in extracted["normalization_warnings"]
+    )
+
+
+def test_unitless_management_counts_and_conflict_are_preserved(
+    client_and_llm,
+) -> None:
+    client, mock_llm = client_and_llm
+    mock_llm.responses = [
+        json.dumps(
+            full_extraction(
+                project_name="中交一公局临平项目",
+                report_date="2026-08-13",
+                management_count=None,
+                worker_count=None,
+                missing_fields=["management_count", "worker_count"],
+            ),
+            ensure_ascii=False,
+        )
+    ]
+    content = (
+        "中交一公局临平项目2026年8月13日施工情况\n"
+        "一、天气情况：晴，气温26~36℃；机械情况：塔吊3台、挖机2台\n"
+        "三、施工人数：\n"
+        "管理人员15：项目管理人员10人，协作队伍管理人员7；\n"
+        "现场工人总计：47人。\n"
+        "四、施工内容：9#楼地梁拆模11人，地梁浇水养护1人。"
+    )
+    client.post(
+        "/api/dev/mock-message",
+        json=report_message("unitless-management-conflict", content),
+    )
+    extracted = client.post(
+        "/api/messages/unitless-management-conflict/extract-report"
+    ).json()
+
+    assert extracted["management_count"] is None
+    assert extracted["worker_count"] == 47
+    assert "management_count" in extracted["missing_fields"]
+    assert "worker_count" not in extracted["missing_fields"]
+    assert "管理人员数据冲突：原文总数 15 人，明细合计 17 人" in (
+        extracted["normalization_warnings"]
+    )
+
+
 def test_missing_weather_is_null_and_listed(client_and_llm) -> None:
     client, mock_llm = client_and_llm
     extraction = full_extraction(weather=None, missing_fields=["weather"])

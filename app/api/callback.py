@@ -35,6 +35,10 @@ from app.services.message_service import process_plain_message
 from app.services.image_recognition_tasks import (
     schedule_image_recognition_if_enabled,
 )
+from app.services.image_archive_tasks import schedule_image_archive
+from app.services.chat_workflow_service import (
+    schedule_chat_workflow_if_enabled,
+)
 from app.services.xml_service import (
     XMLMessageError,
     normalize_plaintext_xml,
@@ -169,7 +173,11 @@ async def receive_callback_message(
     if callback_format == "json":
         try:
             result = process_plain_message(message, "jjt", session)
+            schedule_image_archive(background_tasks, request, result)
             schedule_image_recognition_if_enabled(
+                background_tasks, request, result
+            )
+            schedule_chat_workflow_if_enabled(
                 background_tasks, request, result
             )
         except MessageNormalizationError as exc:
@@ -195,6 +203,13 @@ async def _extract_encrypted_body(request: Request) -> tuple[str, CallbackFormat
     body = await request.body()
     if len(body) > MAX_CALLBACK_BODY_BYTES:
         raise HTTPException(status_code=413, detail="回调请求体过大")
+    stripped = body.lstrip()
+    # 部分网关会把交建通 JSON 外壳转发为 text/xml。优先嗅探请求体，
+    # Content-Type 只用于无法从首字符判断时的兼容分流。
+    if stripped.startswith(b"{"):
+        return _parse_jjt_json_envelope(body), "json"
+    if stripped.startswith(b"<"):
+        return _parse_wecom_xml_envelope(body), "xml"
     media_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
     if media_type in {"application/xml", "text/xml"}:
         return _parse_wecom_xml_envelope(body), "xml"

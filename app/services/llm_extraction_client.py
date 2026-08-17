@@ -36,6 +36,10 @@ relevance_status 只能是 report、related_update、ordinary_chat、uncertain�
 relevance_reason 用一句简短中文说明依据，relevance_confidence 为 0 到 1。
 report_date 使用 YYYY-MM-DD；confidence 为 0 到 1 的数字。
 原文只有月日没有年份时 report_date 返回 null，年份由后端按消息时间补全。
+原文明示“施工总人数/总施工人数”时，worker_count 必须使用该总数，不能改用
+各施工子项人数相加。management_count 只统计原文明确标注为“管理人员”的人数；
+若有多项单位管理人员则相加，不能仅因岗位位于“管理及后台”等章节就把安全文明
+施工、加工人员或其他后台岗位算作管理人员。
 equipment 为 null 或对象数组，每项严格包含 name、count、unit。
 work_items 为 null 或对象数组，每项严格包含 location、content、progress，
 其中 content 必须是原文明示的非空施工内容；无法确定 content 的片段不要加入数组，

@@ -70,6 +70,7 @@ class Message(Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     aibotid: Mapped[str | None] = mapped_column(String(255), nullable=True)
     chatid: Mapped[str] = mapped_column(String(255), nullable=False)
+    chat_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     chattype: Mapped[str] = mapped_column(String(32), nullable=False)
     sender_userid: Mapped[str] = mapped_column(String(255), nullable=False)
     msgtype: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -103,6 +104,13 @@ class Message(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         uselist=False,
+    )
+
+    people_confirmation_requests: Mapped[list["PeopleConfirmationRequest"]] = (
+        relationship(
+            back_populates="source_message",
+            foreign_keys="PeopleConfirmationRequest.source_message_id",
+        )
     )
 
 
@@ -226,6 +234,9 @@ class ProjectReport(Base):
     normalization_warnings: Mapped[str] = mapped_column(
         Text, nullable=False, default="[]"
     )
+    superseded_by_report_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_reports.id", ondelete="SET NULL"), nullable=True
+    )
     raw_extraction_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -254,6 +265,65 @@ class ProjectReport(Base):
     images: Mapped[list["ProjectReportImage"]] = relationship(
         back_populates="project_report",
         order_by="ProjectReportImage.id",
+    )
+    people_confirmation_requests: Mapped[list["PeopleConfirmationRequest"]] = (
+        relationship(back_populates="project_report")
+    )
+
+
+class PeopleConfirmationRequest(Base):
+    __tablename__ = "people_confirmation_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'refused', 'ignored')",
+            name="ck_people_confirmation_status",
+        ),
+        Index(
+            "ix_people_confirmation_conversation",
+            "chatid",
+            "sender_userid",
+            "status",
+        ),
+        Index(
+            "ix_people_confirmation_report_id", "project_report_id"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chatid: Mapped[str] = mapped_column(String(255), nullable=False)
+    sender_userid: Mapped[str] = mapped_column(String(255), nullable=False)
+    project_report_id: Mapped[int] = mapped_column(
+        ForeignKey("project_reports.id", ondelete="CASCADE"), nullable=False
+    )
+    source_message_id: Mapped[int] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
+    )
+    requested_fields: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending"
+    )
+    resolved_by_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        AwareDateTime(), nullable=False, default=utc_now, onupdate=utc_now
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        AwareDateTime(), nullable=True
+    )
+
+    project_report: Mapped[ProjectReport] = relationship(
+        back_populates="people_confirmation_requests"
+    )
+    source_message: Mapped[Message] = relationship(
+        back_populates="people_confirmation_requests",
+        foreign_keys=[source_message_id],
+    )
+    resolved_by_message: Mapped[Message | None] = relationship(
+        foreign_keys=[resolved_by_message_id]
     )
 
 
@@ -429,10 +499,12 @@ class DailyReportSummary(Base):
         Index("ix_daily_summaries_report_date", "report_date"),
         Index("ix_daily_summaries_generation_status", "generation_status"),
         Index("ix_daily_summaries_publication_status", "publication_status"),
+        Index("ix_daily_summaries_public_token", "public_token", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     chatid: Mapped[str] = mapped_column(String(255), nullable=False)
+    public_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     report_date: Mapped[date] = mapped_column(Date, nullable=False)
     project_count: Mapped[int] = mapped_column(Integer, nullable=False)
     management_total: Mapped[int | None] = mapped_column(Integer, nullable=True)

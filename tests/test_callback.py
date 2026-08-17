@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.services.crypto_service import JJTCryptoService
+from app.services.image_recognition_client import ImageBinary
 
 
 TOKEN = "test-callback-token"
@@ -189,6 +190,58 @@ def test_post_valid_message_returns_200(client_and_dir) -> None:
     assert response.content == b""
 
 
+def test_mixed_message_image_is_archived_without_vision_recognition(
+    tmp_path: Path,
+) -> None:
+    class StaticImageLoader:
+        def load(self, attachment):
+            del attachment
+            return ImageBinary(
+                data=b"\xff\xd8\xff\xe0archived-project-image",
+                media_type="image/jpeg",
+                sha256="a" * 64,
+            )
+
+    data_dir = tmp_path / "archive-messages"
+    settings = Settings(
+        callback_token=TOKEN,
+        encoding_aes_key=ENCODING_AES_KEY,
+        message_data_dir=data_dir,
+        database_url=f"sqlite:///{(tmp_path / 'archive.db').as_posix()}",
+        enable_auto_image_recognition=False,
+    )
+    payload = {
+        **sample_message("archive-mixed-001"),
+        "msgtype": "mixed",
+        "mixed": {
+            "msg_item": [
+                {"msgtype": "text", "text": {"content": "桥梁项目施工情况"}},
+                {
+                    "msgtype": "image",
+                    "image": {"url": "https://images.example.com/site.jpg"},
+                },
+            ]
+        },
+    }
+    payload.pop("text", None)
+    encrypted = encrypt_for_test(json.dumps(payload).encode("utf-8"))
+    with TestClient(
+        create_app(settings, image_content_loader=StaticImageLoader())
+    ) as client:
+        response = client.post(
+            "/jjt-robot/callback",
+            params=signed_params(encrypted),
+            json={"encrypt": encrypted},
+        )
+        detail = client.get("/api/messages/archive-mixed-001").json()
+
+    assert response.status_code == 200
+    attachment = detail["attachments"][0]
+    assert attachment["download_status"] == "downloaded"
+    assert Path(attachment["local_path"]).is_file()
+    assert Path(attachment["local_path"]).read_bytes().startswith(b"\xff\xd8\xff")
+
+
 def test_post_invalid_msg_signature_returns_403_without_persistence(
     client_and_dir,
 ) -> None:
@@ -279,6 +332,20 @@ def test_post_json_callback_also_saves_sqlite(client_and_dir) -> None:
     assert detail.status_code == 200
     assert detail.json()["source"] == "jjt"
     assert detail.json()["text_content"] == "@机器人 测试消息"
+
+
+def test_json_body_is_detected_when_gateway_marks_it_as_xml(client_and_dir) -> None:
+    client, _ = client_and_dir
+    message = sample_message("gateway-content-type-001")
+    encrypted = encrypt_for_test(json.dumps(message).encode("utf-8"))
+    response = client.post(
+        "/jjt-robot/callback",
+        params=signed_params(encrypted),
+        content=json.dumps({"encrypt": encrypted}),
+        headers={"content-type": "text/xml; charset=utf-8"},
+    )
+    assert response.status_code == 200
+    assert client.get("/api/messages/gateway-content-type-001").status_code == 200
 
 
 def test_post_json_callback_automatically_detects_report(client_and_dir) -> None:

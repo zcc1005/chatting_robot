@@ -35,6 +35,15 @@ def test_document_group_text_format(load_message_fixture) -> None:
     assert normalized.process_status == "received"
 
 
+def test_real_group_name_is_normalized_when_callback_provides_it(
+    load_message_fixture,
+) -> None:
+    payload = load_message_fixture("jjt_formats/group_text.json")
+    payload["group_name"] = "三级单位测试群"
+    normalized = normalize_jjt_message(payload, "jjt")
+    assert normalized.chat_name == "三级单位测试群"
+
+
 def test_document_group_mixed_format(load_message_fixture) -> None:
     normalized = normalize_jjt_message(
         load_message_fixture("jjt_formats/group_mixed.json"), "jjt"

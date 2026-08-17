@@ -1,6 +1,6 @@
 services:
   chat-robot:
-    image: crpi-5zyp5pdzn7yrv5oo.cn-beijing.personal.cr.aliyuncs.com/zcc_0811/chat_robot:${IMAGE_TAG:-0.2.0}
+    image: crpi-5zyp5pdzn7yrv5oo.cn-beijing.personal.cr.aliyuncs.com/zcc_0811/chat_robot:${IMAGE_TAG:-0.2.8}
     container_name: chat-robot
     restart: unless-stopped
     env_file:

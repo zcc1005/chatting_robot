@@ -47,6 +47,15 @@ def get_by_msgid(session: Session, msgid: str) -> ProjectReport | None:
     return session.scalar(statement)
 
 
+def get_by_id(session: Session, report_id: int) -> ProjectReport | None:
+    statement = (
+        select(ProjectReport)
+        .options(*_load_options())
+        .where(ProjectReport.id == report_id)
+    )
+    return session.scalar(statement)
+
+
 def start_extraction(session: Session, message: Message) -> ProjectReport:
     record = get_by_message_id(session, message.id)
     now = datetime.now(timezone.utc)
@@ -165,6 +174,24 @@ def apply_manual_patch(
         _replace_equipment(record, patch.equipment)
     if "work_items" in patch.model_fields_set:
         _replace_work_items(record, patch.work_items)
+
+    if {"management_count", "worker_count"} & patch.model_fields_set:
+        warnings = deserialize_string_list(record.normalization_warnings)
+        if "management_count" in patch.model_fields_set:
+            warnings = [
+                warning
+                for warning in warnings
+                if not warning.startswith("管理人员数据冲突：")
+                and "管理人员数量" not in warning
+            ]
+        if "worker_count" in patch.model_fields_set:
+            warnings = [
+                warning
+                for warning in warnings
+                if "施工总人数" not in warning
+                and "施工人员数量" not in warning
+            ]
+        record.normalization_warnings = serialize_string_list(warnings)
 
     missing_fields = _calculate_record_missing_fields(record)
     record.missing_fields = serialize_missing_fields(missing_fields)

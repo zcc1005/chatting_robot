@@ -1,0 +1,30 @@
+# Place these locations inside the existing HTTPS server block for
+# www.sanrenxietong.com. Keep the exact callback route ahead of the prefix route.
+
+location = /robot {
+    proxy_pass http://127.0.0.1:8000/jjt-robot/callback;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Port $server_port;
+    proxy_set_header X-Forwarded-Prefix /robot;
+}
+
+location /robot/ {
+    # The trailing slash strips /robot/ before forwarding:
+    # /robot/health -> /health
+    proxy_pass http://127.0.0.1:8000/;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Port $server_port;
+    proxy_set_header X-Forwarded-Prefix /robot;
+}

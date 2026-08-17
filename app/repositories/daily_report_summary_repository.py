@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from datetime import date, datetime, timezone
 
 from sqlalchemy import select
@@ -29,6 +30,7 @@ def list_source_reports(
         .join(ProjectReport.message)
         .options(
             joinedload(ProjectReport.message),
+            joinedload(ProjectReport.message).selectinload(Message.attachments),
             selectinload(ProjectReport.equipment),
             selectinload(ProjectReport.work_items),
             selectinload(ProjectReport.images)
@@ -37,8 +39,12 @@ def list_source_reports(
             .joinedload(ProjectReportImage.attachment)
             .joinedload(MessageAttachment.message),
         )
-        .where(Message.chatid == chatid, ProjectReport.report_date == report_date)
-        .order_by(ProjectReport.id.asc())
+        .where(
+            Message.chatid == chatid,
+            ProjectReport.report_date == report_date,
+            ProjectReport.superseded_by_report_id.is_(None),
+        )
+        .order_by(Message.received_at.asc(), ProjectReport.id.asc())
     )
     return list(session.scalars(statement).all())
 
@@ -68,20 +74,40 @@ def save_summary_snapshot(
     session: Session,
     preview: DailyReportPreviewResponse,
     source_reports: list[ProjectReport],
+    public_base_url: str = "",
 ) -> DailyReportSummary:
     now = datetime.now(timezone.utc)
+    public_token = secrets.token_urlsafe(32)
+    visual_url = (
+        f"{public_base_url.rstrip('/')}/visual-reports/{public_token}"
+        if public_base_url
+        else None
+    )
+    saved_preview = preview
+    if visual_url:
+        saved_preview = preview.model_copy(
+            update={
+                "visual_report_url": visual_url,
+                "markdown_content": (
+                    preview.markdown_content.rstrip()
+                    + "\n\n## 可视化日报\n\n"
+                    + f"[点击查看图表与项目图片]({visual_url})\n"
+                ),
+            }
+        )
     record = DailyReportSummary(
-        chatid=preview.chatid,
-        report_date=preview.report_date,
-        project_count=preview.project_count,
-        management_total=preview.management_total,
-        worker_total=preview.worker_total,
-        generation_status=preview.generation_status,
-        markdown_content=preview.markdown_content,
+        chatid=saved_preview.chatid,
+        public_token=public_token,
+        report_date=saved_preview.report_date,
+        project_count=saved_preview.project_count,
+        management_total=saved_preview.management_total,
+        worker_total=saved_preview.worker_total,
+        generation_status=saved_preview.generation_status,
+        markdown_content=saved_preview.markdown_content,
         warnings_json=json.dumps(
-            preview.warnings, ensure_ascii=False, separators=(",", ":")
+            saved_preview.warnings, ensure_ascii=False, separators=(",", ":")
         ),
-        snapshot_json=preview.model_dump_json(),
+        snapshot_json=saved_preview.model_dump_json(),
         created_at=now,
         updated_at=now,
     )

@@ -33,6 +33,7 @@ def create_message(
         source=normalized_message.source,
         aibotid=normalized_message.aibotid,
         chatid=normalized_message.chatid,
+        chat_name=normalized_message.chat_name,
         chattype=normalized_message.chattype,
         sender_userid=normalized_message.sender_userid,
         msgtype=normalized_message.msgtype,
@@ -100,5 +101,15 @@ def get_message_detail(session: Session, msgid: str) -> Message | None:
             joinedload(Message.report_detection),
         )
         .where(Message.msgid == msgid)
+    )
+    return session.scalar(statement)
+
+
+def get_chat_name(session: Session, chatid: str) -> str | None:
+    statement = (
+        select(Message.chat_name)
+        .where(Message.chatid == chatid, Message.chat_name.is_not(None))
+        .order_by(Message.received_at.desc(), Message.id.desc())
+        .limit(1)
     )
     return session.scalar(statement)

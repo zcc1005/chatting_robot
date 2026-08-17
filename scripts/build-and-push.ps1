@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Tag = "0.2.0",
+    [string]$Tag = "0.2.8",
     [string]$Platform = "linux/amd64",
     [switch]$AlsoLatest
 )

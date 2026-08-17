@@ -22,6 +22,32 @@ _FULL_NUMERIC_DATE = re.compile(
 _MONTH_DAY = re.compile(
     r"(?<!\d)(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*日"
 )
+_COUNT_TOKEN = r"[零〇一二两三四五六七八九十百千万\d]+"
+_WORKER_TOTAL_PATTERN = re.compile(
+    rf"(?:施工总人数|总施工人数|施工人员(?:总数|总计|合计)|"
+    rf"现场施工人员(?:总数|总计|合计)|现场工人(?:总数|总计|合计))"
+    rf"\s*(?:共|为)?\s*[:：]?\s*(?P<count>{_COUNT_TOKEN})\s*(?:人|名)?"
+    rf"(?=\s*[:：；;，,。\n]|$)"
+)
+_MANAGEMENT_DECLARED_TOTAL_PATTERN = re.compile(
+    rf"(?:管理人员(?:总数|总计|合计)|管理总人数)"
+    rf"\s*(?:共|为)?\s*[:：]?\s*(?P<count>{_COUNT_TOKEN})\s*(?:人|名)?"
+    rf"(?=\s*[:：；;，,。\n]|$)"
+)
+_MANAGEMENT_LINE_TOTAL_PATTERN = re.compile(
+    rf"(?m)(?:^|[\n；;。])\s*"
+    rf"(?:[一二三四五六七八九十\d]+\s*[、.．]\s*)?"
+    rf"管理人员\s*(?:共|为)?\s*[:：]?\s*(?P<count>{_COUNT_TOKEN})"
+    rf"\s*(?:人|名)?(?=\s*[:：；;，,。\n]|$)"
+)
+_MANAGEMENT_COLON_TOTAL_PATTERN = re.compile(
+    rf"管理人员\s*(?:共|为)?\s*[:：]?\s*(?P<count>{_COUNT_TOKEN})"
+    rf"\s*(?:人|名)?\s*[:：]"
+)
+_MANAGEMENT_ITEM_PATTERN = re.compile(
+    rf"管理人员\s*(?:共|为)?\s*[:：]?\s*(?P<count>{_COUNT_TOKEN})"
+    rf"\s*(?:人|名)?(?=\s*[:：；;，,。()（）\n]|$)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +63,7 @@ def normalize_extraction_response(
     text_content: str,
     received_at: datetime,
 ) -> NormalizedExtractionResponse:
-    """只修复可由原文确定的日期和无有效内容的孤立施工子项。"""
+    """只修复可由原文确定的日期、人数和无效施工子项。"""
     try:
         payload = json.loads(raw_response)
     except (json.JSONDecodeError, TypeError):
@@ -60,6 +86,32 @@ def normalize_extraction_response(
         ):
             payload["report_date"] = resolved.isoformat()
             changed = True
+
+    worker_count = _single_explicit_count(_WORKER_TOTAL_PATTERN, text_content)
+    if worker_count is not None and payload.get("worker_count") != worker_count:
+        payload["worker_count"] = worker_count
+        warnings.append(
+            f"原文明示施工总人数为 {worker_count} 人，已覆盖大模型施工人员数量"
+        )
+        changed = True
+
+    management_count, management_warning = _resolve_management_count(
+        text_content
+    )
+    if management_warning is not None:
+        payload["management_count"] = None
+        warnings.append(management_warning)
+        changed = True
+    elif (
+        management_count is not None
+        and payload.get("management_count") != management_count
+    ):
+        payload["management_count"] = management_count
+        warnings.append(
+            f"原文明示的管理人员数量为 {management_count} 人，"
+            "已覆盖大模型管理人员数量"
+        )
+        changed = True
 
     work_items = payload.get("work_items")
     if isinstance(work_items, list):
@@ -147,3 +199,126 @@ def _safe_date(year: int, month: int, day: int) -> date | None:
         return date(year, month, day)
     except ValueError:
         return None
+
+
+def _single_explicit_count(
+    pattern: re.Pattern[str], text_content: str
+) -> int | None:
+    values = _all_explicit_counts(pattern, text_content)
+    if not values or len(set(values)) != 1:
+        return None
+    return values[0]
+
+
+def _all_explicit_counts(
+    pattern: re.Pattern[str], text_content: str
+) -> list[int]:
+    values: list[int] = []
+    for match in pattern.finditer(text_content):
+        value = _parse_count(match.group("count"))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _resolve_management_count(
+    text_content: str,
+) -> tuple[int | None, str | None]:
+    total_matches = _unique_count_matches(
+        (
+            _MANAGEMENT_DECLARED_TOTAL_PATTERN,
+            _MANAGEMENT_LINE_TOTAL_PATTERN,
+            _MANAGEMENT_COLON_TOTAL_PATTERN,
+        ),
+        text_content,
+    )
+    total_values = [value for _, value in total_matches]
+    unique_totals = sorted(set(total_values))
+    if len(unique_totals) > 1:
+        values = "、".join(str(value) for value in unique_totals)
+        return None, f"管理人员数据冲突：原文出现多个总数（{values} 人）"
+
+    total_spans = [span for span, _ in total_matches]
+    item_values = [
+        value
+        for span, value in _count_matches(
+            _MANAGEMENT_ITEM_PATTERN, text_content
+        )
+        if not any(_spans_overlap(span, total_span) for total_span in total_spans)
+    ]
+    total = unique_totals[0] if unique_totals else None
+    item_sum = sum(item_values) if item_values else None
+    if total is not None and item_sum is not None and total != item_sum:
+        return (
+            None,
+            f"管理人员数据冲突：原文总数 {total} 人，明细合计 {item_sum} 人",
+        )
+    if total is not None:
+        return total, None
+    if item_sum is not None:
+        return item_sum, None
+    return None, None
+
+
+def _unique_count_matches(
+    patterns: tuple[re.Pattern[str], ...], text_content: str
+) -> list[tuple[tuple[int, int], int]]:
+    matches: list[tuple[tuple[int, int], int]] = []
+    seen: set[tuple[int, int]] = set()
+    for pattern in patterns:
+        for span, value in _count_matches(pattern, text_content):
+            if span not in seen:
+                seen.add(span)
+                matches.append((span, value))
+    return matches
+
+
+def _count_matches(
+    pattern: re.Pattern[str], text_content: str
+) -> list[tuple[tuple[int, int], int]]:
+    matches: list[tuple[tuple[int, int], int]] = []
+    for match in pattern.finditer(text_content):
+        value = _parse_count(match.group("count"))
+        if value is not None:
+            matches.append((match.span(), value))
+    return matches
+
+
+def _spans_overlap(first: tuple[int, int], second: tuple[int, int]) -> bool:
+    return first[0] < second[1] and second[0] < first[1]
+
+
+def _parse_count(raw: str) -> int | None:
+    if raw.isdigit():
+        return int(raw)
+    digits = {
+        "零": 0,
+        "〇": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    units = {"十": 10, "百": 100, "千": 1000}
+    total = 0
+    section = 0
+    number = 0
+    for character in raw:
+        if character in digits:
+            number = digits[character]
+        elif character in units:
+            section += (number or 1) * units[character]
+            number = 0
+        elif character == "万":
+            total += (section + number) * 10_000
+            section = 0
+            number = 0
+        else:
+            return None
+    return total + section + number

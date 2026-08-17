@@ -35,6 +35,7 @@ from app.repositories.daily_report_summary_repository import (
     list_summaries,
     save_summary_snapshot,
 )
+from app.repositories.message_repository import get_chat_name
 from app.services.daily_report_publication_service import (
     PublicationConflictError,
     SummaryNotFoundError,
@@ -47,6 +48,7 @@ from app.services.daily_report_summary_service import (
     DailyReportSummaryError,
     build_daily_report_preview,
 )
+from app.services.duplicate_report_service import auto_select_latest_reports
 
 
 router = APIRouter(prefix="/api/daily-reports", tags=["多项目日报汇总预览"])
@@ -58,29 +60,41 @@ def preview_daily_report(
     request_data: DailyReportRequest,
     session: Session = Depends(get_db),
 ) -> DailyReportPreviewResponse:
-    reports = list_source_reports(
+    reports = auto_select_latest_reports(
         session,
-        chatid=request_data.chatid,
-        report_date=request_data.report_date,
+        list_source_reports(
+            session,
+            chatid=request_data.chatid,
+            report_date=request_data.report_date,
+        ),
     )
     images = list_source_images(session, chatid=request_data.chatid)
-    return _build_preview(request_data, reports, images)
+    return _build_preview(session, request_data, reports, images)
 
 
 @router.post("", response_model=DailyReportSummaryResponse)
 def save_daily_report(
     request_data: DailyReportRequest,
+    request: Request,
     session: Session = Depends(get_db),
 ) -> DailyReportSummaryResponse:
-    reports = list_source_reports(
+    reports = auto_select_latest_reports(
         session,
-        chatid=request_data.chatid,
-        report_date=request_data.report_date,
+        list_source_reports(
+            session,
+            chatid=request_data.chatid,
+            report_date=request_data.report_date,
+        ),
     )
     images = list_source_images(session, chatid=request_data.chatid)
-    preview = _build_preview(request_data, reports, images)
+    preview = _build_preview(session, request_data, reports, images)
     try:
-        record = save_summary_snapshot(session, preview, reports)
+        record = save_summary_snapshot(
+            session,
+            preview,
+            reports,
+            public_base_url=request.app.state.settings.public_base_url,
+        )
     except SQLAlchemyError:
         session.rollback()
         logger.exception(
@@ -215,12 +229,13 @@ def query_daily_report_send_attempts(
 
 
 def _build_preview(
-    request_data: DailyReportRequest, reports, images
+    session: Session, request_data: DailyReportRequest, reports, images
 ) -> DailyReportPreviewResponse:
     try:
         return build_daily_report_preview(
             reports,
             chatid=request_data.chatid,
+            chat_name=get_chat_name(session, request_data.chatid),
             report_date=request_data.report_date,
             image_recognitions=images,
         )
@@ -255,6 +270,7 @@ def _to_list_item(record: DailyReportSummary) -> DailyReportSummaryListItem:
     return DailyReportSummaryListItem(
         id=record.id,
         chatid=record.chatid,
+        chat_name=preview.chat_name,
         report_date=record.report_date,
         project_count=record.project_count,
         fully_complete_project_count=preview.fully_complete_project_count,
